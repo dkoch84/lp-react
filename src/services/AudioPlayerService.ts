@@ -71,23 +71,35 @@ export class AudioPlayerService {
 
     const track = this.currentAlbum.tracks[this.currentTrackIndex];
     
-    // Stop and cleanup current audio completely before starting new one
+    // Stop current audio if playing but don't immediately clear source
     if (this.currentAudio) {
-      this.currentAudio.pause();
+      if (!this.currentAudio.paused) {
+        this.currentAudio.pause();
+      }
       this.currentAudio.currentTime = 0;
-      this.currentAudio.src = '';
-      this.currentAudio = null;
     }
 
-    // Wait a moment to ensure cleanup is complete
-    await new Promise(resolve => setTimeout(resolve, 50));
-
     // Create new audio element
-    this.currentAudio = new Audio();
-    this.currentAudio.src = musicLibraryService.getAudioUrl(track);
+    const newAudio = new Audio();
+    newAudio.src = musicLibraryService.getAudioUrl(track);
     
-    // Set up event listeners
-    this.setupAudioEventListeners(this.currentAudio, track);
+    // Set up event listeners before setting as current
+    this.setupAudioEventListeners(newAudio, track);
+
+    // Replace current audio only after new one is set up
+    const oldAudio = this.currentAudio;
+    this.currentAudio = newAudio;
+    
+    // Clean up old audio after a delay to avoid AbortError
+    if (oldAudio) {
+      setTimeout(() => {
+        try {
+          oldAudio.src = '';
+        } catch (error) {
+          // Ignore cleanup errors
+        }
+      }, 100);
+    }
 
     // Preload next track for gapless playback
     this.preloadNextTrack();
@@ -102,11 +114,11 @@ export class AudioPlayerService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('Error playing track:', track.title, 'by', track.artist, '-', errorMessage);
-      // Skip to next track if current one fails to play, but add delay to prevent rapid cascading
-      if (this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
+      // Only skip if this is still the current track (prevent cascading skips)
+      if (this.currentAudio === newAudio && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
         this.currentTrackIndex++;
         // Add delay before trying next track to prevent rapid cascade of failures
-        setTimeout(() => this.playCurrentTrack(), 500);
+        setTimeout(() => this.playCurrentTrack(), 1000);
       } else {
         this.updatePlaybackState({ isPlaying: false });
       }
@@ -127,13 +139,19 @@ export class AudioPlayerService {
     });
 
     audio.addEventListener('error', (error) => {
-      // Only log if this is still the current audio to avoid spam from old elements
+      // Only log and handle errors for the current audio to avoid spam from old elements
       if (audio === this.currentAudio) {
         console.error('Audio playback error for track:', track.title, 'by', track.artist);
-        // Skip to next track if current one has an error, with delay to prevent cascading
+        // Only skip to next track for certain error types, and with delay to prevent cascading
         if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
-          this.currentTrackIndex++;
-          setTimeout(() => this.playCurrentTrack(), 500);
+          // Add longer delay to prevent rapid failure cascades
+          setTimeout(() => {
+            // Check again if this is still the current audio before skipping
+            if (audio === this.currentAudio) {
+              this.currentTrackIndex++;
+              this.playCurrentTrack();
+            }
+          }, 2000);
         } else {
           this.updatePlaybackState({ isPlaying: false });
         }
@@ -176,8 +194,9 @@ export class AudioPlayerService {
     this.currentTrackIndex++;
     
     if (this.currentTrackIndex < this.currentAlbum.tracks.length) {
-      // Use preloaded next track for gapless playback
+      // Use preloaded next track for gapless playback if available
       if (this.nextAudio) {
+        const oldAudio = this.currentAudio;
         this.currentAudio = this.nextAudio;
         this.nextAudio = null;
         
@@ -192,7 +211,20 @@ export class AudioPlayerService {
           this.preloadNextTrack();
         }).catch(error => {
           console.error('Error playing next track:', error);
+          // Fallback to regular loading if preloaded track fails
+          this.playCurrentTrack();
         });
+        
+        // Clean up old audio after delay
+        if (oldAudio) {
+          setTimeout(() => {
+            try {
+              oldAudio.src = '';
+            } catch (error) {
+              // Ignore cleanup errors
+            }
+          }, 100);
+        }
       } else {
         // Fallback to regular track loading
         this.playCurrentTrack();

@@ -17,11 +17,8 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
     let currentAlbumArt: string | null = null;
     
     const loadAlbumArt = async () => {
-      // Clean up previous album art
-      if (albumArt) {
-        URL.revokeObjectURL(albumArt);
-        setAlbumArt(null);
-      }
+      setIsLoading(true);
+      setAlbumArt(null);
       
       if (album.tracks.length > 0) {
         try {
@@ -49,7 +46,18 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
         URL.revokeObjectURL(currentAlbumArt);
       }
     };
-  }, [album, albumArt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [album.id]); // Only depend on album.id, not albumArt to prevent infinite loop
+
+  // Cleanup effect when component unmounts
+  useEffect(() => {
+    return () => {
+      if (albumArt) {
+        URL.revokeObjectURL(albumArt);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on unmount
 
   const formatDuration = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
