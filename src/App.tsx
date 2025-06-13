@@ -36,7 +36,8 @@ function App() {
     setScanStats({ totalFiles: 0, processedFiles: 0, artistCount: 0, albumCount: 0 });
     
     try {
-      // Use the progress streaming version
+      // Note: In development mode with React.StrictMode, this effect may run twice
+      // This is expected behavior and helps detect side effects. In production, it runs once.
       const libraryArtists = await musicLibraryService.fetchMusicLibraryWithProgress(
         (progress: ScanProgress) => {
           setScanProgress(progress);

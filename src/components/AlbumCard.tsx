@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Album } from '../types/music';
 import { musicLibraryService } from '../services/MusicLibraryService';
 import './AlbumCard.css';
@@ -11,22 +11,30 @@ interface AlbumCardProps {
 const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
   const [albumArt, setAlbumArt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const albumIdRef = useRef<string>('');
 
   useEffect(() => {
+    // Only proceed if this is a new album
+    if (albumIdRef.current === album.id) {
+      return;
+    }
+    
     let isMounted = true;
     let currentAlbumArt: string | null = null;
     
     const loadAlbumArt = async () => {
       setIsLoading(true);
       setAlbumArt(null);
+      albumIdRef.current = album.id;
       
       if (album.tracks.length > 0) {
         try {
           const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0]);
-          if (isMounted) {
+          if (isMounted && albumIdRef.current === album.id) {
             currentAlbumArt = artUrl;
             setAlbumArt(artUrl);
           } else if (artUrl) {
+            // Clean up if component unmounted or album changed
             URL.revokeObjectURL(artUrl);
           }
         } catch (error) {
@@ -46,18 +54,16 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
         URL.revokeObjectURL(currentAlbumArt);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [album.id]); // Only depend on album.id, not albumArt to prevent infinite loop
+  }, [album.id, album.tracks]); // Include necessary dependencies
 
   // Cleanup effect when component unmounts
   useEffect(() => {
     return () => {
-      if (albumArt) {
+      if (albumArt && albumArt.startsWith('blob:')) {
         URL.revokeObjectURL(albumArt);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run on unmount
+  }, [albumArt]); // Include albumArt dependency
 
   const formatDuration = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);

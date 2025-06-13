@@ -340,9 +340,6 @@ app.get('/api/audio/*', async (req, res) => {
     const relativePath = req.params[0];
     const filePath = path.join(MUSIC_LIBRARY_PATH, relativePath);
     
-    console.log(`Audio request: ${relativePath}`);
-    console.log(`Resolved file path: ${filePath}`);
-    
     // Security check: ensure the file is within the music library
     const resolvedPath = path.resolve(filePath);
     const resolvedLibraryPath = path.resolve(MUSIC_LIBRARY_PATH);
@@ -452,26 +449,22 @@ app.get('/api/albumart/*', async (req, res) => {
     const relativePath = req.params[0];
     const filePath = path.join(MUSIC_LIBRARY_PATH, relativePath);
     
-    console.log(`Album art request: ${relativePath}`);
-    console.log(`Resolved file path: ${filePath}`);
+    // Reduce logging verbosity - only log once per unique album directory
+    const albumDirectory = path.dirname(filePath);
+    const logKey = `albumart-${albumDirectory}`;
     
     // Security check
     const resolvedPath = path.resolve(filePath);
     const resolvedLibraryPath = path.resolve(MUSIC_LIBRARY_PATH);
     
     if (!resolvedPath.startsWith(resolvedLibraryPath)) {
-      console.log(`Access denied for path: ${resolvedPath}`);
       return res.status(403).json({ error: 'Access denied' });
     }
     
     // The file path should point to an audio file, we'll look for album art in its directory
-    const albumDirectory = path.dirname(filePath);
-    
     try {
       await fs.access(albumDirectory);
-      console.log(`Album directory exists: ${albumDirectory}`);
     } catch (error) {
-      console.log(`Album directory not found: ${albumDirectory}`);
       return res.status(404).json({ error: 'Album directory not found' });
     }
     
@@ -479,8 +472,6 @@ app.get('/api/albumart/*', async (req, res) => {
     const albumArtPath = await findAlbumArtInDirectory(albumDirectory);
     
     if (albumArtPath) {
-      console.log(`Album art found: ${albumArtPath}`);
-      
       // Determine content type based on file extension
       const ext = path.extname(albumArtPath).toLowerCase();
       let contentType = 'image/jpeg';
@@ -499,7 +490,6 @@ app.get('/api/albumart/*', async (req, res) => {
       
       imageStream.pipe(res);
     } else {
-      console.log(`No album art found in directory: ${albumDirectory}`);
       res.status(404).json({ error: 'No album art found' });
     }
   } catch (error) {
