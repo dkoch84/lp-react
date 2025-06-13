@@ -95,13 +95,23 @@ export class MusicLibraryService {
       const response = await fetch(albumArtUrl);
       
       if (!response.ok) {
+        // Silently handle 404s and other expected failures
+        if (response.status !== 404) {
+          console.warn(`Unexpected response ${response.status} for album art: ${albumArtUrl}`);
+        }
         return null;
       }
       
       const blob = await response.blob();
       return URL.createObjectURL(blob);
     } catch (error) {
-      console.error('Error extracting album art:', error);
+      // Only log unexpected errors, not network failures for missing album art
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        // Network error - likely server not available, log but don't spam console
+        console.warn('Unable to fetch album art - server may not be available');
+      } else {
+        console.error('Error extracting album art:', error);
+      }
       return null;
     }
   }

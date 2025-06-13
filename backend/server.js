@@ -106,17 +106,41 @@ async function scanMusicDirectory(dirPath, progressCallback = null) {
   return tracks;
 }
 
+// Utility function to generate unique, safe IDs
+function generateSafeId(text) {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '') // Remove special characters except spaces and hyphens
+    .replace(/\s+/g, '-') // Replace spaces with hyphens
+    .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+    .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
+}
+
 // Organize tracks into artists and albums
 function organizeTracksIntoLibrary(tracks) {
   const artistMap = new Map();
+  const usedArtistIds = new Set();
+  const usedAlbumIds = new Set();
 
   tracks.forEach(track => {
     const artistName = track.artist;
     const albumTitle = track.album;
 
     if (!artistMap.has(artistName)) {
+      let artistId = generateSafeId(artistName);
+      
+      // Ensure unique artist ID
+      let counter = 1;
+      const originalArtistId = artistId;
+      while (usedArtistIds.has(artistId)) {
+        artistId = `${originalArtistId}-${counter}`;
+        counter++;
+      }
+      usedArtistIds.add(artistId);
+
       artistMap.set(artistName, {
-        id: artistName.toLowerCase().replace(/\s+/g, '-'),
+        id: artistId,
         name: artistName,
         albums: []
       });
@@ -126,8 +150,19 @@ function organizeTracksIntoLibrary(tracks) {
     let album = artist.albums.find(a => a.title === albumTitle);
 
     if (!album) {
+      let albumId = generateSafeId(`${artistName}-${albumTitle}`);
+      
+      // Ensure unique album ID
+      let counter = 1;
+      const originalAlbumId = albumId;
+      while (usedAlbumIds.has(albumId)) {
+        albumId = `${originalAlbumId}-${counter}`;
+        counter++;
+      }
+      usedAlbumIds.add(albumId);
+
       album = {
-        id: `${artistName}-${albumTitle}`.toLowerCase().replace(/\s+/g, '-'),
+        id: albumId,
         title: albumTitle,
         artist: artistName,
         tracks: []
@@ -279,10 +314,13 @@ app.get('/api/library', async (req, res) => {
 });
 
 // Serve audio files
-app.get('/api/audio/:*', async (req, res) => {
+app.get('/api/audio/*', async (req, res) => {
   try {
     const relativePath = req.params[0];
     const filePath = path.join(MUSIC_LIBRARY_PATH, relativePath);
+    
+    console.log(`Audio request: ${relativePath}`);
+    console.log(`Resolved file path: ${filePath}`);
     
     // Security check: ensure the file is within the music library
     const resolvedPath = path.resolve(filePath);
@@ -355,22 +393,28 @@ app.get('/api/audio/:*', async (req, res) => {
 });
 
 // Get album art
-app.get('/api/albumart/:*', async (req, res) => {
+app.get('/api/albumart/*', async (req, res) => {
   try {
     const relativePath = req.params[0];
     const filePath = path.join(MUSIC_LIBRARY_PATH, relativePath);
+    
+    console.log(`Album art request: ${relativePath}`);
+    console.log(`Resolved file path: ${filePath}`);
     
     // Security check
     const resolvedPath = path.resolve(filePath);
     const resolvedLibraryPath = path.resolve(MUSIC_LIBRARY_PATH);
     
     if (!resolvedPath.startsWith(resolvedLibraryPath)) {
+      console.log(`Access denied for path: ${resolvedPath}`);
       return res.status(403).json({ error: 'Access denied' });
     }
     
     try {
       await fs.access(filePath);
+      console.log(`File exists: ${filePath}`);
     } catch (error) {
+      console.log(`File not found: ${filePath}, error: ${error.message}`);
       return res.status(404).json({ error: 'File not found' });
     }
     
@@ -378,12 +422,14 @@ app.get('/api/albumart/:*', async (req, res) => {
     const picture = metadata.common.picture?.[0];
     
     if (picture) {
+      console.log(`Album art found for: ${filePath}`);
       res.set({
         'Content-Type': picture.format,
         'Content-Length': picture.data.length
       });
       res.send(picture.data);
     } else {
+      console.log(`No album art found in: ${filePath}`);
       res.status(404).json({ error: 'No album art found' });
     }
   } catch (error) {
