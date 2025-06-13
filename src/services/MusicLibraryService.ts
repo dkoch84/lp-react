@@ -1,4 +1,4 @@
-import { Track, Artist } from '../types/music';
+import { Track, Artist, ScanProgress } from '../types/music';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
 
@@ -16,6 +16,69 @@ export class MusicLibraryService {
       console.error('Error fetching music library:', error);
       throw error;
     }
+  }
+
+  async fetchMusicLibraryWithProgress(
+    onProgress: (progress: ScanProgress) => void
+  ): Promise<Artist[]> {
+    // Check if EventSource is available (not available in Node.js test environment)
+    if (typeof EventSource === 'undefined') {
+      // Fallback to the regular method without progress for tests
+      return this.fetchMusicLibrary();
+    }
+    
+    return new Promise((resolve, reject) => {
+      const eventSource = new EventSource(`${API_BASE_URL}/library/scan`);
+      
+      eventSource.onopen = () => {
+        console.log('SSE connection opened');
+      };
+
+      eventSource.addEventListener('start', (event: MessageEvent) => {
+        const data = JSON.parse(event.data);
+        onProgress({
+          type: 'directory',
+          message: data.message
+        });
+      });
+
+      eventSource.addEventListener('progress', (event: MessageEvent) => {
+        const data = JSON.parse(event.data);
+        onProgress(data);
+      });
+
+      eventSource.addEventListener('complete', (event: MessageEvent) => {
+        const data = JSON.parse(event.data);
+        onProgress({
+          type: 'processed',
+          message: data.message,
+          totalFiles: data.totalTracks,
+          processedFiles: data.totalTracks,
+          artistCount: data.artistCount,
+          albumCount: data.albumCount
+        });
+        
+        eventSource.close();
+        resolve(data.artists || []);
+      });
+
+      eventSource.addEventListener('error', (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          eventSource.close();
+          reject(new Error(data.message || 'Failed to scan music library'));
+        } catch (parseError) {
+          eventSource.close();
+          reject(new Error('Failed to scan music library'));
+        }
+      });
+
+      eventSource.onerror = (error) => {
+        console.error('SSE connection error:', error);
+        eventSource.close();
+        reject(new Error('Connection error while scanning music library'));
+      };
+    });
   }
 
   getAudioUrl(track: Track): string {

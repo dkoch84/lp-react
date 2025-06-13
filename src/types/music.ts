@@ -31,3 +31,18 @@ export interface PlaybackState {
   position: number;
   duration: number;
 }
+
+export interface ScanProgress {
+  type: 'scanning' | 'processed' | 'directory' | 'error';
+  message: string;
+  file?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  path?: string;
+  error?: string;
+  totalFiles?: number;
+  processedFiles?: number;
+  artistCount?: number;
+  albumCount?: number;
+}

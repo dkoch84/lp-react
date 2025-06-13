@@ -24,7 +24,7 @@ function isAudioFile(filename) {
 }
 
 // Recursively scan directory for audio files
-async function scanMusicDirectory(dirPath) {
+async function scanMusicDirectory(dirPath, progressCallback = null) {
   const tracks = [];
   
   try {
@@ -34,10 +34,26 @@ async function scanMusicDirectory(dirPath) {
       const fullPath = path.join(dirPath, entry.name);
       
       if (entry.isDirectory()) {
+        if (progressCallback) {
+          progressCallback({
+            type: 'directory',
+            path: fullPath,
+            relativePath: path.relative(MUSIC_LIBRARY_PATH, fullPath)
+          });
+        }
         // Recursively scan subdirectories
-        const subTracks = await scanMusicDirectory(fullPath);
+        const subTracks = await scanMusicDirectory(fullPath, progressCallback);
         tracks.push(...subTracks);
       } else if (entry.isFile() && isAudioFile(entry.name)) {
+        if (progressCallback) {
+          progressCallback({
+            type: 'file',
+            path: fullPath,
+            filename: entry.name,
+            relativePath: path.relative(MUSIC_LIBRARY_PATH, fullPath)
+          });
+        }
+        
         try {
           // Parse metadata for audio files
           const metadata = await musicMetadata.parseFile(fullPath);
@@ -53,14 +69,38 @@ async function scanMusicDirectory(dirPath) {
             relativePath: path.relative(MUSIC_LIBRARY_PATH, fullPath)
           };
           
+          if (progressCallback) {
+            progressCallback({
+              type: 'track',
+              track: track,
+              artist: track.artist,
+              album: track.album,
+              title: track.title
+            });
+          }
+          
           tracks.push(track);
         } catch (error) {
           console.error(`Error parsing ${fullPath}:`, error.message);
+          if (progressCallback) {
+            progressCallback({
+              type: 'error',
+              path: fullPath,
+              error: error.message
+            });
+          }
         }
       }
     }
   } catch (error) {
     console.error(`Error scanning directory ${dirPath}:`, error.message);
+    if (progressCallback) {
+      progressCallback({
+        type: 'error',
+        path: dirPath,
+        error: error.message
+      });
+    }
   }
   
   return tracks;
@@ -110,6 +150,108 @@ function organizeTracksIntoLibrary(tracks) {
 }
 
 // API Routes
+
+// Server-Sent Events endpoint for library scanning with progress
+app.get('/api/library/scan', async (req, res) => {
+  // Set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    console.log(`Starting SSE scan of music library at: ${MUSIC_LIBRARY_PATH}`);
+    
+    // Check if music library directory exists
+    try {
+      await fs.access(MUSIC_LIBRARY_PATH);
+    } catch (error) {
+      sendEvent('error', { 
+        message: 'Music library directory not found',
+        path: MUSIC_LIBRARY_PATH 
+      });
+      res.end();
+      return;
+    }
+    
+    sendEvent('start', { message: 'Starting music library scan', path: MUSIC_LIBRARY_PATH });
+    
+    let totalFiles = 0;
+    let processedFiles = 0;
+    const artists = new Set();
+    const albums = new Set();
+    
+    const progressCallback = (progress) => {
+      if (progress.type === 'file') {
+        totalFiles++;
+        sendEvent('progress', {
+          type: 'scanning',
+          message: `Scanning: ${progress.filename}`,
+          file: progress.filename,
+          path: progress.relativePath,
+          totalFiles,
+          processedFiles
+        });
+      } else if (progress.type === 'track') {
+        processedFiles++;
+        artists.add(progress.artist);
+        albums.add(`${progress.artist} - ${progress.album}`);
+        
+        sendEvent('progress', {
+          type: 'processed',
+          message: `Processed: ${progress.title} by ${progress.artist}`,
+          title: progress.title,
+          artist: progress.artist,
+          album: progress.album,
+          totalFiles,
+          processedFiles,
+          artistCount: artists.size,
+          albumCount: albums.size
+        });
+      } else if (progress.type === 'directory') {
+        sendEvent('progress', {
+          type: 'directory',
+          message: `Scanning directory: ${progress.relativePath || progress.path}`,
+          path: progress.relativePath || progress.path
+        });
+      } else if (progress.type === 'error') {
+        sendEvent('progress', {
+          type: 'error',
+          message: `Error processing: ${progress.path}`,
+          error: progress.error
+        });
+      }
+    };
+    
+    const tracks = await scanMusicDirectory(MUSIC_LIBRARY_PATH, progressCallback);
+    const organizedArtists = organizeTracksIntoLibrary(tracks);
+    
+    sendEvent('complete', { 
+      message: `Scan complete! Found ${tracks.length} tracks from ${artists.size} artists`,
+      artists: organizedArtists, 
+      totalTracks: tracks.length,
+      artistCount: artists.size,
+      albumCount: albums.size
+    });
+    
+  } catch (error) {
+    console.error('Error during SSE library scan:', error);
+    sendEvent('error', { 
+      message: 'Failed to scan music library',
+      error: error.message 
+    });
+  }
+  
+  res.end();
+});
 
 // Get music library
 app.get('/api/library', async (req, res) => {
