@@ -2,8 +2,8 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders file upload interface', () => {
+test('renders loading state initially', () => {
   render(<App />);
-  const dragDropText = screen.getByText(/Drag and drop FLAC files here/i);
-  expect(dragDropText).toBeInTheDocument();
+  const loadingText = screen.getByText(/Loading Music Library/i);
+  expect(loadingText).toBeInTheDocument();
 });

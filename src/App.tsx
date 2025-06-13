@@ -1,34 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Artist, Album } from './types/music';
 import { musicLibraryService } from './services/MusicLibraryService';
-import FileUploader from './components/FileUploader';
 import ArtistLibrary from './components/ArtistLibrary';
 import AlbumPlayer from './components/AlbumPlayer';
 import './App.css';
 
 enum AppView {
-  UPLOADER,
+  LOADING,
   LIBRARY,
-  PLAYER
+  PLAYER,
+  ERROR
 }
 
 function App() {
-  const [currentView, setCurrentView] = useState<AppView>(AppView.UPLOADER);
+  const [currentView, setCurrentView] = useState<AppView>(AppView.LOADING);
   const [artists, setArtists] = useState<Artist[]>([]);
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleFilesSelected = async (files: FileList) => {
-    setIsLoading(true);
+  useEffect(() => {
+    loadMusicLibrary();
+  }, []);
+
+  const loadMusicLibrary = async () => {
+    setCurrentView(AppView.LOADING);
+    setError(null);
+    
     try {
-      const tracks = await musicLibraryService.parseMultipleFiles(files);
-      const organizedArtists = musicLibraryService.organizeTracksIntoLibrary(tracks);
-      setArtists(organizedArtists);
+      const libraryArtists = await musicLibraryService.fetchMusicLibrary();
+      setArtists(libraryArtists);
       setCurrentView(AppView.LIBRARY);
     } catch (error) {
-      console.error('Error processing files:', error);
-    } finally {
-      setIsLoading(false);
+      console.error('Error loading music library:', error);
+      setError('Failed to load music library. Please make sure the backend server is running and your music library is accessible.');
+      setCurrentView(AppView.ERROR);
     }
   };
 
@@ -42,20 +47,34 @@ function App() {
     setSelectedAlbum(null);
   };
 
-  const handleBackToUploader = () => {
-    setCurrentView(AppView.UPLOADER);
-    setArtists([]);
-    setSelectedAlbum(null);
+  const handleRefreshLibrary = () => {
+    loadMusicLibrary();
   };
 
   const renderContent = () => {
     switch (currentView) {
-      case AppView.UPLOADER:
+      case AppView.LOADING:
         return (
-          <FileUploader 
-            onFilesSelected={handleFilesSelected}
-            isLoading={isLoading}
-          />
+          <div className="loading-container">
+            <div className="vinyl-icon">♪</div>
+            <h2>Loading Music Library...</h2>
+            <p>Scanning your music collection...</p>
+          </div>
+        );
+      
+      case AppView.ERROR:
+        return (
+          <div className="error-container">
+            <div className="vinyl-icon">⚠</div>
+            <h2>Error Loading Music Library</h2>
+            <p>{error}</p>
+            <button 
+              className="retry-btn"
+              onClick={handleRefreshLibrary}
+            >
+              Retry
+            </button>
+          </div>
         );
       
       case AppView.LIBRARY:
@@ -65,9 +84,9 @@ function App() {
               <h1>LP - Vinyl Experience Music Player</h1>
               <button 
                 className="header-btn"
-                onClick={handleBackToUploader}
+                onClick={handleRefreshLibrary}
               >
-                Add More Music
+                Refresh Library
               </button>
             </div>
             <ArtistLibrary 

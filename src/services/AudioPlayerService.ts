@@ -1,4 +1,5 @@
 import { Track, Album, PlaybackState } from '../types/music';
+import { musicLibraryService } from './MusicLibraryService';
 
 export class AudioPlayerService {
   private audioContext: AudioContext | null = null;
@@ -78,7 +79,7 @@ export class AudioPlayerService {
 
     // Create new audio element
     this.currentAudio = new Audio();
-    this.currentAudio.src = URL.createObjectURL(track.file);
+    this.currentAudio.src = musicLibraryService.getAudioUrl(track);
     
     // Set up event listeners
     this.setupAudioEventListeners(this.currentAudio, track);
@@ -130,7 +131,7 @@ export class AudioPlayerService {
     }
 
     this.nextAudio = new Audio();
-    this.nextAudio.src = URL.createObjectURL(nextTrack.file);
+    this.nextAudio.src = musicLibraryService.getAudioUrl(nextTrack);
     this.nextAudio.preload = 'auto';
   }
 

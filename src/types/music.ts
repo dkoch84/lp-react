@@ -6,7 +6,7 @@ export interface Track {
   trackNumber: number;
   duration: number;
   filePath: string;
-  file: File;
+  relativePath: string;
 }
 
 export interface Album {

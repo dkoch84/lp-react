@@ -25,7 +25,7 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
       
       if (album.tracks.length > 0) {
         try {
-          const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0].file);
+          const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0]);
           if (isMounted) {
             currentAlbumArt = artUrl;
             setAlbumArt(artUrl);
