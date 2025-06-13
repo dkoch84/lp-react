@@ -95,8 +95,15 @@ export class AudioPlayerService {
         duration: track.duration
       });
     } catch (error) {
-      console.error('Error playing track:', error);
-      this.updatePlaybackState({ isPlaying: false });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Error playing track:', track.title, 'by', track.artist, '-', errorMessage);
+      // Skip to next track if current one fails to play
+      if (this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
+        this.currentTrackIndex++;
+        this.playCurrentTrack();
+      } else {
+        this.updatePlaybackState({ isPlaying: false });
+      }
     }
   }
 
@@ -114,8 +121,14 @@ export class AudioPlayerService {
     });
 
     audio.addEventListener('error', (error) => {
-      console.error('Audio playback error:', error);
-      this.updatePlaybackState({ isPlaying: false });
+      console.error('Audio playback error for track:', track.title, 'by', track.artist);
+      // Skip to next track if current one has an error
+      if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
+        this.currentTrackIndex++;
+        this.playCurrentTrack();
+      } else {
+        this.updatePlaybackState({ isPlaying: false });
+      }
     });
   }
 
@@ -193,11 +206,20 @@ export class AudioPlayerService {
     if (this.currentAudio) {
       this.currentAudio.pause();
       this.currentAudio.currentTime = 0;
-      this.currentAudio.src = '';
+      // Only clear src after a brief delay to avoid AbortError
+      setTimeout(() => {
+        if (this.currentAudio) {
+          this.currentAudio.src = '';
+        }
+      }, 100);
     }
     
     if (this.nextAudio) {
-      this.nextAudio.src = '';
+      setTimeout(() => {
+        if (this.nextAudio) {
+          this.nextAudio.src = '';
+        }
+      }, 100);
     }
 
     this.updatePlaybackState({

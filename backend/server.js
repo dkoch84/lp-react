@@ -107,14 +107,25 @@ async function scanMusicDirectory(dirPath, progressCallback = null) {
 }
 
 // Utility function to generate unique, safe IDs
-function generateSafeId(text) {
-  return text
+function generateSafeId(text, fallbackPrefix = 'item') {
+  if (!text || typeof text !== 'string') {
+    return fallbackPrefix;
+  }
+  
+  let safeId = text
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9\s-]/g, '') // Remove special characters except spaces and hyphens
     .replace(/\s+/g, '-') // Replace spaces with hyphens
     .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
     .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
+  
+  // If the result is empty or too short, use fallback with original text length
+  if (!safeId || safeId.length < 2) {
+    safeId = `${fallbackPrefix}-${text.length}-${Date.now() % 10000}`;
+  }
+  
+  return safeId;
 }
 
 // Organize tracks into artists and albums
@@ -128,14 +139,19 @@ function organizeTracksIntoLibrary(tracks) {
     const albumTitle = track.album;
 
     if (!artistMap.has(artistName)) {
-      let artistId = generateSafeId(artistName);
+      let artistId = generateSafeId(artistName, 'artist');
       
-      // Ensure unique artist ID
+      // Ensure unique artist ID with better collision detection
       let counter = 1;
       const originalArtistId = artistId;
       while (usedArtistIds.has(artistId)) {
         artistId = `${originalArtistId}-${counter}`;
         counter++;
+        // Prevent infinite loops
+        if (counter > 1000) {
+          artistId = `artist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          break;
+        }
       }
       usedArtistIds.add(artistId);
 
@@ -150,14 +166,19 @@ function organizeTracksIntoLibrary(tracks) {
     let album = artist.albums.find(a => a.title === albumTitle);
 
     if (!album) {
-      let albumId = generateSafeId(`${artistName}-${albumTitle}`);
+      let albumId = generateSafeId(`${artistName}-${albumTitle}`, 'album');
       
-      // Ensure unique album ID
+      // Ensure unique album ID with better collision detection
       let counter = 1;
       const originalAlbumId = albumId;
       while (usedAlbumIds.has(albumId)) {
         albumId = `${originalAlbumId}-${counter}`;
         counter++;
+        // Prevent infinite loops
+        if (counter > 1000) {
+          albumId = `album-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          break;
+        }
       }
       usedAlbumIds.add(albumId);
 
@@ -418,19 +439,31 @@ app.get('/api/albumart/*', async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
     
-    const metadata = await musicMetadata.parseFile(filePath);
-    const picture = metadata.common.picture?.[0];
+    // Check if file is an audio file
+    if (!isAudioFile(filePath)) {
+      console.log(`Not an audio file: ${filePath}`);
+      return res.status(404).json({ error: 'Not an audio file' });
+    }
     
-    if (picture) {
-      console.log(`Album art found for: ${filePath}`);
-      res.set({
-        'Content-Type': picture.format,
-        'Content-Length': picture.data.length
-      });
-      res.send(picture.data);
-    } else {
-      console.log(`No album art found in: ${filePath}`);
-      res.status(404).json({ error: 'No album art found' });
+    try {
+      const metadata = await musicMetadata.parseFile(filePath);
+      const picture = metadata.common.picture?.[0];
+      
+      if (picture) {
+        console.log(`Album art found for: ${filePath}`);
+        res.set({
+          'Content-Type': picture.format,
+          'Content-Length': picture.data.length
+        });
+        res.send(picture.data);
+      } else {
+        console.log(`No album art found in: ${filePath}`);
+        res.status(404).json({ error: 'No album art found' });
+      }
+    } catch (metadataError) {
+      // If metadata parsing fails, treat as "no album art found" rather than server error
+      console.log(`Cannot parse metadata for: ${filePath}, error: ${metadataError.message}`);
+      res.status(404).json({ error: 'Cannot extract album art from file' });
     }
   } catch (error) {
     console.error('Error serving album art:', error);

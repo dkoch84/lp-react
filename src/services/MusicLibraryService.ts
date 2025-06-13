@@ -95,10 +95,7 @@ export class MusicLibraryService {
       const response = await fetch(albumArtUrl);
       
       if (!response.ok) {
-        // Silently handle 404s and other expected failures
-        if (response.status !== 404) {
-          console.warn(`Unexpected response ${response.status} for album art: ${albumArtUrl}`);
-        }
+        // Silently handle 404s and other expected failures - no console warnings needed
         return null;
       }
       
@@ -107,10 +104,11 @@ export class MusicLibraryService {
     } catch (error) {
       // Only log unexpected errors, not network failures for missing album art
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        // Network error - likely server not available, log but don't spam console
-        console.warn('Unable to fetch album art - server may not be available');
+        // Network error - likely server not available, don't spam console
+        return null;
       } else {
-        console.error('Error extracting album art:', error);
+        // Only log truly unexpected errors
+        console.warn('Unexpected error extracting album art:', error);
       }
       return null;
     }
