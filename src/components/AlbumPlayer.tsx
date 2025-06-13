@@ -65,7 +65,7 @@ const AlbumPlayer: React.FC<AlbumPlayerProps> = ({ album, onBack }) => {
         URL.revokeObjectURL(currentAlbumArt);
       }
     };
-  }, [album]);
+  }, [album, albumArt]);
 
   const handlePlay = () => {
     if (album) {

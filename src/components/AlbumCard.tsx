@@ -49,7 +49,7 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
         URL.revokeObjectURL(currentAlbumArt);
       }
     };
-  }, [album]);
+  }, [album, albumArt]);
 
   const formatDuration = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
