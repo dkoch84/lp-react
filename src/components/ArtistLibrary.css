@@ -1,0 +1,82 @@
+.artist-library {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.library-header {
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.library-header h2 {
+  color: #333;
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.library-header p {
+  color: #666;
+  font-size: 1.1rem;
+}
+
+.artist-section {
+  margin-bottom: 3rem;
+}
+
+.artist-name {
+  color: #333;
+  font-size: 1.8rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid #eee;
+}
+
+.albums-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 2rem;
+  margin-top: 1.5rem;
+}
+
+.empty-library {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+  padding: 2rem;
+}
+
+.empty-message {
+  text-align: center;
+  color: #666;
+}
+
+.empty-message h3 {
+  font-size: 1.8rem;
+  margin-bottom: 1rem;
+  color: #333;
+}
+
+.empty-message p {
+  font-size: 1.1rem;
+}
+
+@media (max-width: 768px) {
+  .albums-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+  }
+  
+  .artist-library {
+    padding: 1rem;
+  }
+  
+  .library-header h2 {
+    font-size: 2rem;
+  }
+  
+  .artist-name {
+    font-size: 1.5rem;
+  }
+}
