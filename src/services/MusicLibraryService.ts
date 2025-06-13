@@ -89,6 +89,33 @@ export class MusicLibraryService {
     return `${API_BASE_URL}/albumart/${encodeURIComponent(track.relativePath)}`;
   }
 
+  getArtistImageUrl(artistName: string): string {
+    return `${API_BASE_URL}/artistart/${encodeURIComponent(artistName)}`;
+  }
+
+  async extractArtistImage(artistName: string): Promise<string | null> {
+    try {
+      const artistImageUrl = this.getArtistImageUrl(artistName);
+      const response = await fetch(artistImageUrl);
+      
+      if (!response.ok) {
+        // Silently handle 404s and other expected failures
+        return null;
+      }
+      
+      const blob = await response.blob();
+      return URL.createObjectURL(blob);
+    } catch (error) {
+      // Only log unexpected errors, not network failures
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        return null;
+      } else {
+        console.warn('Unexpected error extracting artist image:', error);
+      }
+      return null;
+    }
+  }
+
   async extractAlbumArt(track: Track): Promise<string | null> {
     try {
       const albumArtUrl = this.getAlbumArtUrl(track);

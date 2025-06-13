@@ -413,6 +413,39 @@ app.get('/api/audio/*', async (req, res) => {
   }
 });
 
+// Find album art files in directory (cover.jpg/png, folder.jpg/png - case insensitive)
+async function findAlbumArtInDirectory(dirPath) {
+  const artFileNames = [
+    'cover.jpg', 'cover.jpeg', 'cover.png',
+    'folder.jpg', 'folder.jpeg', 'folder.png'
+  ];
+  
+  try {
+    const entries = await fs.readdir(dirPath);
+    
+    for (const artFileName of artFileNames) {
+      // Case-insensitive search
+      const foundFile = entries.find(entry => 
+        entry.toLowerCase() === artFileName.toLowerCase()
+      );
+      
+      if (foundFile) {
+        const artPath = path.join(dirPath, foundFile);
+        try {
+          await fs.access(artPath);
+          return artPath;
+        } catch (error) {
+          continue;
+        }
+      }
+    }
+  } catch (error) {
+    console.log(`Error reading directory ${dirPath}:`, error.message);
+  }
+  
+  return null;
+}
+
 // Get album art
 app.get('/api/albumart/*', async (req, res) => {
   try {
@@ -431,43 +464,122 @@ app.get('/api/albumart/*', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     
+    // The file path should point to an audio file, we'll look for album art in its directory
+    const albumDirectory = path.dirname(filePath);
+    
     try {
-      await fs.access(filePath);
-      console.log(`File exists: ${filePath}`);
+      await fs.access(albumDirectory);
+      console.log(`Album directory exists: ${albumDirectory}`);
     } catch (error) {
-      console.log(`File not found: ${filePath}, error: ${error.message}`);
-      return res.status(404).json({ error: 'File not found' });
+      console.log(`Album directory not found: ${albumDirectory}`);
+      return res.status(404).json({ error: 'Album directory not found' });
     }
     
-    // Check if file is an audio file
-    if (!isAudioFile(filePath)) {
-      console.log(`Not an audio file: ${filePath}`);
-      return res.status(404).json({ error: 'Not an audio file' });
-    }
+    // Look for album art files in the album directory
+    const albumArtPath = await findAlbumArtInDirectory(albumDirectory);
     
-    try {
-      const metadata = await musicMetadata.parseFile(filePath);
-      const picture = metadata.common.picture?.[0];
+    if (albumArtPath) {
+      console.log(`Album art found: ${albumArtPath}`);
       
-      if (picture) {
-        console.log(`Album art found for: ${filePath}`);
-        res.set({
-          'Content-Type': picture.format,
-          'Content-Length': picture.data.length
-        });
-        res.send(picture.data);
-      } else {
-        console.log(`No album art found in: ${filePath}`);
-        res.status(404).json({ error: 'No album art found' });
+      // Determine content type based on file extension
+      const ext = path.extname(albumArtPath).toLowerCase();
+      let contentType = 'image/jpeg';
+      if (ext === '.png') {
+        contentType = 'image/png';
       }
-    } catch (metadataError) {
-      // If metadata parsing fails, treat as "no album art found" rather than server error
-      console.log(`Cannot parse metadata for: ${filePath}, error: ${metadataError.message}`);
-      res.status(404).json({ error: 'Cannot extract album art from file' });
+      
+      // Stream the image file
+      const imageStream = require('fs').createReadStream(albumArtPath);
+      const stat = await fs.stat(albumArtPath);
+      
+      res.set({
+        'Content-Type': contentType,
+        'Content-Length': stat.size
+      });
+      
+      imageStream.pipe(res);
+    } else {
+      console.log(`No album art found in directory: ${albumDirectory}`);
+      res.status(404).json({ error: 'No album art found' });
     }
   } catch (error) {
     console.error('Error serving album art:', error);
     res.status(500).json({ error: 'Failed to serve album art' });
+  }
+});
+
+// Get artist image (randomly selected from artist's album arts)
+app.get('/api/artistart/:artistName', async (req, res) => {
+  try {
+    const artistName = decodeURIComponent(req.params.artistName);
+    console.log(`Artist art request for: ${artistName}`);
+    
+    // Find all albums for this artist
+    const artistDir = path.join(MUSIC_LIBRARY_PATH, artistName);
+    
+    // Security check
+    const resolvedPath = path.resolve(artistDir);
+    const resolvedLibraryPath = path.resolve(MUSIC_LIBRARY_PATH);
+    
+    if (!resolvedPath.startsWith(resolvedLibraryPath)) {
+      console.log(`Access denied for artist path: ${resolvedPath}`);
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    try {
+      await fs.access(artistDir);
+    } catch (error) {
+      console.log(`Artist directory not found: ${artistDir}`);
+      return res.status(404).json({ error: 'Artist not found' });
+    }
+    
+    // Get all album directories for this artist
+    const entries = await fs.readdir(artistDir, { withFileTypes: true });
+    const albumDirs = entries
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join(artistDir, entry.name));
+    
+    // Collect all available album arts
+    const availableAlbumArts = [];
+    for (const albumDir of albumDirs) {
+      const albumArtPath = await findAlbumArtInDirectory(albumDir);
+      if (albumArtPath) {
+        availableAlbumArts.push(albumArtPath);
+      }
+    }
+    
+    if (availableAlbumArts.length === 0) {
+      console.log(`No album art found for artist: ${artistName}`);
+      return res.status(404).json({ error: 'No artist image found' });
+    }
+    
+    // Randomly select one of the available album arts
+    const randomIndex = Math.floor(Math.random() * availableAlbumArts.length);
+    const selectedArtPath = availableAlbumArts[randomIndex];
+    
+    console.log(`Selected random album art for artist ${artistName}: ${selectedArtPath}`);
+    
+    // Determine content type based on file extension
+    const ext = path.extname(selectedArtPath).toLowerCase();
+    let contentType = 'image/jpeg';
+    if (ext === '.png') {
+      contentType = 'image/png';
+    }
+    
+    // Stream the image file
+    const imageStream = require('fs').createReadStream(selectedArtPath);
+    const stat = await fs.stat(selectedArtPath);
+    
+    res.set({
+      'Content-Type': contentType,
+      'Content-Length': stat.size
+    });
+    
+    imageStream.pipe(res);
+    
+  } catch (error) {
+    console.error('Error serving artist art:', error);
+    res.status(500).json({ error: 'Failed to serve artist art' });
   }
 });
 

@@ -71,11 +71,16 @@ export class AudioPlayerService {
 
     const track = this.currentAlbum.tracks[this.currentTrackIndex];
     
-    // Stop current audio if playing
+    // Stop and cleanup current audio completely before starting new one
     if (this.currentAudio) {
       this.currentAudio.pause();
+      this.currentAudio.currentTime = 0;
       this.currentAudio.src = '';
+      this.currentAudio = null;
     }
+
+    // Wait a moment to ensure cleanup is complete
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     // Create new audio element
     this.currentAudio = new Audio();
@@ -97,10 +102,11 @@ export class AudioPlayerService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('Error playing track:', track.title, 'by', track.artist, '-', errorMessage);
-      // Skip to next track if current one fails to play
+      // Skip to next track if current one fails to play, but add delay to prevent rapid cascading
       if (this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
         this.currentTrackIndex++;
-        this.playCurrentTrack();
+        // Add delay before trying next track to prevent rapid cascade of failures
+        setTimeout(() => this.playCurrentTrack(), 500);
       } else {
         this.updatePlaybackState({ isPlaying: false });
       }
@@ -121,13 +127,16 @@ export class AudioPlayerService {
     });
 
     audio.addEventListener('error', (error) => {
-      console.error('Audio playback error for track:', track.title, 'by', track.artist);
-      // Skip to next track if current one has an error
-      if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
-        this.currentTrackIndex++;
-        this.playCurrentTrack();
-      } else {
-        this.updatePlaybackState({ isPlaying: false });
+      // Only log if this is still the current audio to avoid spam from old elements
+      if (audio === this.currentAudio) {
+        console.error('Audio playback error for track:', track.title, 'by', track.artist);
+        // Skip to next track if current one has an error, with delay to prevent cascading
+        if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
+          this.currentTrackIndex++;
+          setTimeout(() => this.playCurrentTrack(), 500);
+        } else {
+          this.updatePlaybackState({ isPlaying: false });
+        }
       }
     });
   }
@@ -139,13 +148,25 @@ export class AudioPlayerService {
 
     const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex + 1];
     
+    // Clean up existing next audio
     if (this.nextAudio) {
-      this.nextAudio.src = '';
+      try {
+        this.nextAudio.src = '';
+      } catch (error) {
+        // Ignore cleanup errors
+      }
+      this.nextAudio = null;
     }
 
-    this.nextAudio = new Audio();
-    this.nextAudio.src = musicLibraryService.getAudioUrl(nextTrack);
-    this.nextAudio.preload = 'auto';
+    // Create new preloaded audio with minimal setup
+    try {
+      this.nextAudio = new Audio();
+      this.nextAudio.src = musicLibraryService.getAudioUrl(nextTrack);
+      this.nextAudio.preload = 'auto';
+    } catch (error) {
+      console.warn('Failed to preload next track:', error);
+      this.nextAudio = null;
+    }
   }
 
   private handleTrackEnd() {
@@ -203,25 +224,7 @@ export class AudioPlayerService {
   }
 
   stop() {
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.currentTime = 0;
-      // Only clear src after a brief delay to avoid AbortError
-      setTimeout(() => {
-        if (this.currentAudio) {
-          this.currentAudio.src = '';
-        }
-      }, 100);
-    }
-    
-    if (this.nextAudio) {
-      setTimeout(() => {
-        if (this.nextAudio) {
-          this.nextAudio.src = '';
-        }
-      }, 100);
-    }
-
+    // Immediately update state to prevent new operations
     this.updatePlaybackState({
       isPlaying: false,
       currentTrack: null,
@@ -232,6 +235,42 @@ export class AudioPlayerService {
 
     this.currentAlbum = null;
     this.currentTrackIndex = 0;
+
+    // Handle current audio cleanup
+    if (this.currentAudio) {
+      const audioToCleanup = this.currentAudio;
+      this.currentAudio = null; // Clear reference immediately
+      
+      try {
+        audioToCleanup.pause();
+        audioToCleanup.currentTime = 0;
+      } catch (error) {
+        // Ignore pause/seek errors during cleanup
+      }
+      
+      // Clear src after longer delay to avoid AbortError
+      setTimeout(() => {
+        try {
+          audioToCleanup.src = '';
+        } catch (error) {
+          // Ignore cleanup errors
+        }
+      }, 200);
+    }
+    
+    // Handle next audio cleanup
+    if (this.nextAudio) {
+      const nextAudioToCleanup = this.nextAudio;
+      this.nextAudio = null; // Clear reference immediately
+      
+      setTimeout(() => {
+        try {
+          nextAudioToCleanup.src = '';
+        } catch (error) {
+          // Ignore cleanup errors
+        }
+      }, 200);
+    }
   }
 
   getCurrentState(): PlaybackState {
