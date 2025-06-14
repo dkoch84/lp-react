@@ -264,6 +264,152 @@ describe('AudioPlayerService', () => {
     });
   });
 
+  describe('Preloading Timing Diagnostics', () => {
+    it('should verify immediate preloading behavior', async () => {
+      // Track events without console.log interception
+      const events: { timestamp: number; event: string }[] = [];
+      const startTime = Date.now();
+      
+      // Track preloadNextTrack calls
+      const originalPreloadNextTrack = (audioPlayerService as any).preloadNextTrack;
+      let preloadCallTime = 0;
+      (audioPlayerService as any).preloadNextTrack = () => {
+        preloadCallTime = Date.now() - startTime;
+        events.push({ timestamp: preloadCallTime, event: 'preloadNextTrack called' });
+        return originalPreloadNextTrack.call(audioPlayerService);
+      };
+
+      // Track when album starts
+      events.push({ timestamp: 0, event: 'Album playback initiated' });
+      await audioPlayerService.playAlbum(mockAlbum, 0);
+      
+      const playbackStartTime = Date.now() - startTime;
+      events.push({ timestamp: playbackStartTime, event: 'Album playback completed' });
+      
+      // Wait for any async operations
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Restore original method
+      (audioPlayerService as any).preloadNextTrack = originalPreloadNextTrack;
+      
+      console.log('\n=== PRELOADING TIMING VERIFICATION ===');
+      events.forEach(event => {
+        console.log(`${event.timestamp.toString().padStart(4, '0')}ms: ${event.event}`);
+      });
+      
+      // Critical test: preloading should happen very quickly after album starts
+      const preloadEvent = events.find(e => e.event === 'preloadNextTrack called');
+      expect(preloadEvent).toBeDefined();
+      
+      // Preloading should happen within 100ms of album starting
+      expect(preloadCallTime).toBeLessThan(100);
+      console.log(`\nPRELOADING STARTED: ${preloadCallTime}ms after album began`);
+      
+      // Verify that preloading started before we finished waiting
+      expect(preloadCallTime).toBeGreaterThan(0);
+    });
+
+    it('should track real preloading timeline with audio element monitoring', async () => {
+      // Track audio element creation and operations
+      const audioEvents: { timestamp: number; event: string; trackId?: string }[] = [];
+      const startTime = Date.now();
+      
+      const originalAudio = (global as any).Audio;
+      let audioInstanceCount = 0;
+      
+      (global as any).Audio = class extends MockAudio {
+        private _src = '';
+        private instanceId: number;
+        
+        constructor() {
+          super();
+          this.instanceId = ++audioInstanceCount;
+          audioEvents.push({ 
+            timestamp: Date.now() - startTime, 
+            event: `Audio instance ${this.instanceId} created` 
+          });
+        }
+        
+        get src() { return this._src; }
+        set src(value) {
+          this._src = value;
+          if (value) {
+            const trackId = value.substring(value.lastIndexOf('-') + 1);
+            audioEvents.push({ 
+              timestamp: Date.now() - startTime, 
+              event: `Instance ${this.instanceId} src set`, 
+              trackId 
+            });
+          }
+        }
+        
+        load() {
+          super.load();
+          if (this._src) {
+            const trackId = this._src.substring(this._src.lastIndexOf('-') + 1);
+            audioEvents.push({ 
+              timestamp: Date.now() - startTime, 
+              event: `Instance ${this.instanceId} load() called`, 
+              trackId 
+            });
+          }
+        }
+        
+        async play() {
+          const result = await super.play();
+          if (this._src) {
+            const trackId = this._src.substring(this._src.lastIndexOf('-') + 1);
+            audioEvents.push({ 
+              timestamp: Date.now() - startTime, 
+              event: `Instance ${this.instanceId} play() called`, 
+              trackId 
+            });
+          }
+          return result;
+        }
+      };
+      
+      // Start album playback
+      audioEvents.push({ timestamp: 0, event: 'Album playback initiated' });
+      await audioPlayerService.playAlbum(mockAlbum, 0);
+      
+      // Wait for preloading to occur
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Restore original Audio
+      (global as any).Audio = originalAudio;
+      
+      console.log('\n=== AUDIO ELEMENT TIMELINE ===');
+      audioEvents.forEach(event => {
+        const trackInfo = event.trackId ? ` (${event.trackId})` : '';
+        console.log(`${event.timestamp.toString().padStart(4, '0')}ms: ${event.event}${trackInfo}`);
+      });
+      
+      // Analyze for gapless behavior
+      const track1Events = audioEvents.filter(e => e.trackId === 'track1');
+      const track2Events = audioEvents.filter(e => e.trackId === 'track2');
+      
+      console.log(`\nTrack 1 audio events: ${track1Events.length}`);
+      console.log(`Track 2 audio events: ${track2Events.length}`);
+      
+      // Should have events for both tracks
+      expect(track1Events.length).toBeGreaterThan(0);
+      expect(track2Events.length).toBeGreaterThan(0);
+      
+      // Track 2 preloading should start soon after track 1
+      const track1Play = track1Events.find(e => e.event.includes('play()'));
+      const track2SrcSet = track2Events.find(e => e.event.includes('src set'));
+      
+      if (track1Play && track2SrcSet) {
+        const preloadingDelay = track2SrcSet.timestamp - track1Play.timestamp;
+        console.log(`\nTrack 2 preloading delay: ${preloadingDelay}ms after Track 1 started playing`);
+        
+        // For gapless playback, track 2 should start loading quickly after track 1 plays
+        expect(preloadingDelay).toBeLessThan(100);
+      }
+    });
+  });
+
   describe('State Management', () => {
     it('should notify listeners of state changes during track transitions', async () => {
       const stateChanges: any[] = [];
