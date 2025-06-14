@@ -23,7 +23,54 @@ A React-based music player that recreates the vinyl record listening experience.
 
 ### Prerequisites
 - Node.js 14 or higher
+- MySQL or MariaDB database (optional, will fall back to filesystem scanning if not available)
 - Your music collection organized in folders
+
+### Database Setup (Optional)
+
+The application can store music metadata in a MySQL/MariaDB database for faster loading. If no database is configured, it will scan the filesystem on every request.
+
+#### Install and Configure Database
+
+1. **Install MariaDB/MySQL**:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install mariadb-server
+   
+   # macOS with Homebrew
+   brew install mariadb
+   
+   # Start the service
+   sudo systemctl start mariadb  # Linux
+   brew services start mariadb   # macOS
+   ```
+
+2. **Configure Database Access**:
+   ```bash
+   # Create database and user (optional - app will create database automatically)
+   sudo mysql -e "CREATE DATABASE IF NOT EXISTS lp_music;"
+   sudo mysql -e "CREATE USER IF NOT EXISTS 'lp_user'@'localhost' IDENTIFIED BY 'your_password';"
+   sudo mysql -e "GRANT ALL PRIVILEGES ON lp_music.* TO 'lp_user'@'localhost';"
+   sudo mysql -e "FLUSH PRIVILEGES;"
+   ```
+
+3. **Set Environment Variables**:
+   Copy `.env.example` to `.env` and configure database settings:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit `.env`:
+   ```
+   # Database Configuration
+   DB_HOST=localhost
+   DB_PORT=3306
+   DB_USER=lp_user
+   DB_PASSWORD=your_password
+   DB_NAME=lp_music
+   ```
+
+### Installation and Setup
 
 ### Setup
 
@@ -108,6 +155,7 @@ music/
 - **Express server** for serving music files and metadata
 - **Music metadata parsing** using music-metadata library
 - **Automatic library scanning** with recursive directory support
+- **MySQL database integration** for persistent metadata storage
 - **RESTful API** for library access and audio streaming
 - **Security features** to prevent directory traversal attacks
 
@@ -118,10 +166,12 @@ music/
 
 ## API Endpoints
 
-- `GET /api/library` - Fetch organized music library
+- `GET /api/library` - Fetch organized music library (from database if available, filesystem fallback)
+- `POST /api/library/rescan` - Force rescan of music library and update database
+- `GET /api/library/scan` - Server-Sent Events endpoint for real-time library scanning with progress
 - `GET /api/audio/*` - Stream audio files with range support
 - `GET /api/albumart/*` - Serve album artwork
-- `GET /api/health` - Health check and configuration info
+- `GET /api/health` - Health check, configuration info, and database status
 
 ## Development Scripts
 

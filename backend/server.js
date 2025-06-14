@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
 const musicMetadata = require('music-metadata');
+const database = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -13,6 +14,23 @@ const MUSIC_LIBRARY_PATH = process.env.MUSIC_LIBRARY_PATH || path.join(__dirname
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Initialize database
+async function initializeApp() {
+  try {
+    console.log('Initializing database...');
+    await database.createDatabase();
+    database.initializeDatabase();
+    await database.createTables();
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    console.log('Warning: Database not available, music library will rescan on every request');
+  }
+}
+
+// Initialize database on startup
+initializeApp();
 
 // Supported audio file extensions
 const AUDIO_EXTENSIONS = ['.flac', '.mp3', '.wav', '.ogg', '.m4a'];
@@ -141,8 +159,8 @@ function generateSafeId(text, fallbackPrefix = 'item') {
   return safeId;
 }
 
-// Organize tracks into artists and albums
-function organizeTracksIntoLibrary(tracks) {
+// Organize tracks into artists and albums and persist to database
+async function organizeTracksIntoLibrary(tracks, persistToDb = true) {
   const artistMap = new Map();
   const usedArtistIds = new Set();
   const usedAlbumIds = new Set();
@@ -199,11 +217,15 @@ function organizeTracksIntoLibrary(tracks) {
         id: albumId,
         title: albumTitle,
         artist: artistName,
+        artist_id: artist.id,
         tracks: []
       };
       artist.albums.push(album);
     }
 
+    // Add artist_id and album_id to track for database relations
+    track.artist_id = artist.id;
+    track.album_id = album.id;
     album.tracks.push(track);
   });
 
@@ -215,7 +237,45 @@ function organizeTracksIntoLibrary(tracks) {
     artist.albums.sort((a, b) => a.title.localeCompare(b.title));
   });
 
-  return Array.from(artistMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const organizedArtists = Array.from(artistMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+  // Persist to database if requested and available
+  if (persistToDb) {
+    try {
+      console.log('Persisting music library to database...');
+      
+      // Clear existing data
+      await database.clearMusicData();
+      
+      // Save artists, albums, and tracks
+      for (const artist of organizedArtists) {
+        await database.saveArtist(artist);
+        
+        for (const album of artist.albums) {
+          await database.saveAlbum(album);
+          
+          for (const track of album.tracks) {
+            await database.saveTrack(track);
+          }
+        }
+      }
+      
+      // Update scan metadata
+      await database.updateScanMetadata(
+        MUSIC_LIBRARY_PATH, 
+        tracks.length, 
+        organizedArtists.length, 
+        organizedArtists.reduce((total, artist) => total + artist.albums.length, 0)
+      );
+      
+      console.log(`Successfully persisted ${tracks.length} tracks, ${organizedArtists.length} artists to database`);
+    } catch (error) {
+      console.error('Failed to persist to database:', error);
+      console.log('Continuing with in-memory data...');
+    }
+  }
+
+  return organizedArtists;
 }
 
 // API Routes
@@ -331,7 +391,7 @@ app.get('/api/library/scan', async (req, res) => {
       };
       
       const tracks = await scanMusicDirectory(MUSIC_LIBRARY_PATH, progressCallback);
-      const organizedArtists = organizeTracksIntoLibrary(tracks);
+      const organizedArtists = await organizeTracksIntoLibrary(tracks);
       
       const result = {
         artists: organizedArtists,
@@ -374,7 +434,7 @@ app.get('/api/library/scan', async (req, res) => {
 // Get music library
 app.get('/api/library', async (req, res) => {
   try {
-    console.log(`Scanning music library at: ${MUSIC_LIBRARY_PATH}`);
+    console.log(`Checking music library at: ${MUSIC_LIBRARY_PATH}`);
     
     // Check if music library directory exists
     try {
@@ -385,11 +445,40 @@ app.get('/api/library', async (req, res) => {
         path: MUSIC_LIBRARY_PATH 
       });
     }
+
+    // Try to get data from database first
+    try {
+      const dbAvailable = await database.testConnection();
+      if (dbAvailable) {
+        const lastScan = await database.getLastScanInfo(MUSIC_LIBRARY_PATH);
+        
+        // If we have recent data in database, use it
+        if (lastScan && lastScan.total_tracks > 0) {
+          console.log(`Loading library from database (last scan: ${lastScan.last_scan_time})`);
+          const artists = await database.getLibraryFromDatabase();
+          return res.json({ 
+            artists, 
+            totalTracks: lastScan.total_tracks,
+            fromDatabase: true,
+            lastScan: lastScan.last_scan_time
+          });
+        }
+      }
+    } catch (error) {
+      console.log('Database not available, falling back to filesystem scan:', error.message);
+    }
     
+    // Fall back to filesystem scan
+    console.log('Scanning filesystem for music library...');
     const tracks = await scanMusicDirectory(MUSIC_LIBRARY_PATH);
-    const artists = organizeTracksIntoLibrary(tracks);
+    const artists = await organizeTracksIntoLibrary(tracks);
     
-    res.json({ artists, totalTracks: tracks.length });
+    res.json({ 
+      artists, 
+      totalTracks: tracks.length,
+      fromDatabase: false,
+      scannedAt: new Date().toISOString()
+    });
   } catch (error) {
     console.error('Error scanning library:', error);
     res.status(500).json({ error: 'Failed to scan music library' });
@@ -654,11 +743,50 @@ app.get('/api/artistart/:artistName', async (req, res) => {
   }
 });
 
+// Force rescan endpoint
+app.post('/api/library/rescan', async (req, res) => {
+  try {
+    console.log('Force rescanning music library...');
+    
+    // Check if music library directory exists
+    try {
+      await fs.access(MUSIC_LIBRARY_PATH);
+    } catch (error) {
+      return res.status(404).json({ 
+        error: 'Music library directory not found',
+        path: MUSIC_LIBRARY_PATH 
+      });
+    }
+    
+    const tracks = await scanMusicDirectory(MUSIC_LIBRARY_PATH);
+    const artists = await organizeTracksIntoLibrary(tracks);
+    
+    res.json({ 
+      message: 'Rescan completed',
+      artists, 
+      totalTracks: tracks.length,
+      scannedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error during forced rescan:', error);
+    res.status(500).json({ error: 'Failed to rescan music library' });
+  }
+});
+
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'unknown';
+  try {
+    const dbAvailable = await database.testConnection();
+    dbStatus = dbAvailable ? 'connected' : 'disconnected';
+  } catch (error) {
+    dbStatus = 'error';
+  }
+
   res.json({ 
     status: 'OK', 
     musicLibraryPath: MUSIC_LIBRARY_PATH,
+    database: dbStatus,
     timestamp: new Date().toISOString()
   });
 });
