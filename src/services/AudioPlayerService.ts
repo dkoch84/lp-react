@@ -62,6 +62,10 @@ export class AudioPlayerService {
     });
 
     await this.playCurrentTrack();
+    
+    // Start preloading next track immediately after starting album playback
+    // This ensures maximum time for buffering the next track
+    this.preloadNextTrack();
   }
 
   private async playCurrentTrack() {
@@ -113,9 +117,7 @@ export class AudioPlayerService {
       console.log(`Successfully started playing: ${track.title}`);
       this.updatePlaybackState({ isPlaying: true });
       
-      // Start preloading next track immediately for gapless playback
-      // Don't wait for canplaythrough - start buffering as early as possible
-      this.preloadNextTrack();
+      // Preloading is now handled at the album level to ensure maximum buffer time
       
       // Now that the new track is playing successfully, clean up the old audio
       if (oldAudio && oldAudio !== newAudio) {
@@ -263,11 +265,14 @@ export class AudioPlayerService {
       this.nextAudio = null;
     }
 
-    // Create new preloaded audio with minimal setup
+    // Create new preloaded audio with aggressive loading
     try {
       this.nextAudio = new Audio();
       this.nextAudio.src = musicLibraryService.getAudioUrl(nextTrack);
       this.nextAudio.preload = 'auto';
+      
+      // Force the browser to start loading immediately
+      this.nextAudio.load();
       
       // Add event listeners to monitor buffering progress
       this.nextAudio.addEventListener('loadstart', () => {
@@ -331,6 +336,7 @@ export class AudioPlayerService {
           this.currentAudio!.play().then(() => {
             console.log(`Gapless transition to: ${nextTrack.title}`);
             this.updatePlaybackState({ isPlaying: true });
+            // Preload the track after this one for continued gapless playback
             this.preloadNextTrack();
           }).catch(error => {
             console.error('Error playing next track:', error);
@@ -382,6 +388,8 @@ export class AudioPlayerService {
       } else {
         // Fallback to regular track loading
         this.playCurrentTrack();
+        // Ensure next track is still preloaded after fallback
+        setTimeout(() => this.preloadNextTrack(), 100);
       }
     } else {
       // Album finished
