@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Album } from '../types/music';
 import { musicLibraryService } from '../services/MusicLibraryService';
 import './AlbumCard.css';
@@ -11,38 +11,32 @@ interface AlbumCardProps {
 const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
   const [albumArt, setAlbumArt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const albumIdRef = useRef<string>('');
 
   useEffect(() => {
-    // Only proceed if this is a new album
-    if (albumIdRef.current === album.id) {
-      return;
-    }
-    
     let isMounted = true;
     
     const loadAlbumArt = async () => {
       setIsLoading(true);
       setAlbumArt(null);
-      albumIdRef.current = album.id;
       
       if (album.tracks.length > 0) {
         try {
           const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0]);
-          if (isMounted && albumIdRef.current === album.id) {
+          if (isMounted) {
             setAlbumArt(artUrl);
           } else if (artUrl && artUrl.startsWith('blob:')) {
-            // Clean up if component unmounted or album changed
+            // Clean up if component unmounted
             URL.revokeObjectURL(artUrl);
           }
         } catch (error) {
           // Silently handle expected failures (like network errors)
-          if (isMounted && albumIdRef.current === album.id) {
+          if (isMounted) {
             setAlbumArt(null);
           }
         }
       }
-      if (isMounted && albumIdRef.current === album.id) {
+      
+      if (isMounted) {
         setIsLoading(false);
       }
     };
@@ -52,10 +46,9 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
     return () => {
       isMounted = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [album.id]); // Only depend on album.id to prevent infinite loops
+  }, [album.id, album.tracks]); // Depend on album.id and tracks
 
-  // Cleanup effect when component unmounts
+  // Cleanup effect when component unmounts or album art changes
   useEffect(() => {
     return () => {
       if (albumArt && albumArt.startsWith('blob:')) {

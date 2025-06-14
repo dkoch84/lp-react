@@ -135,7 +135,16 @@ export class AudioPlayerService {
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`Failed to play track: ${track.title} by ${track.artist} - ${errorMessage}`);
+      
+      // Don't log errors for expected interruptions during cleanup
+      const isInterruptedError = error instanceof Error && 
+        (error.message.includes('interrupted') || 
+         error.message.includes('removed from the document') ||
+         error.name === 'AbortError');
+      
+      if (!isInterruptedError) {
+        console.error(`Failed to play track: ${track.title} by ${track.artist} - ${errorMessage}`);
+      }
       
       // Only auto-skip on certain types of errors and if we're not at the end
       if (this.currentAudio === newAudio && 
