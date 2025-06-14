@@ -20,9 +20,9 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
     }
     
     let isMounted = true;
-    let currentAlbumArt: string | null = null;
     
     const loadAlbumArt = async () => {
+      console.log(`Loading album art for: ${album.title} by ${album.artist}`);
       setIsLoading(true);
       setAlbumArt(null);
       albumIdRef.current = album.id;
@@ -31,7 +31,7 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
         try {
           const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0]);
           if (isMounted && albumIdRef.current === album.id) {
-            currentAlbumArt = artUrl;
+            console.log(`Album art loaded for: ${album.title}`, artUrl ? 'success' : 'no art found');
             setAlbumArt(artUrl);
           } else if (artUrl) {
             // Clean up if component unmounted or album changed
@@ -50,11 +50,9 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
 
     return () => {
       isMounted = false;
-      if (currentAlbumArt) {
-        URL.revokeObjectURL(currentAlbumArt);
-      }
     };
-  }, [album.id, album.tracks]); // Include necessary dependencies
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [album.id]); // Only depend on album.id, explicitly ignoring other album properties
 
   // Cleanup effect when component unmounts
   useEffect(() => {
@@ -63,7 +61,7 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
         URL.revokeObjectURL(albumArt);
       }
     };
-  }, [albumArt]); // Include albumArt dependency
+  }, [albumArt]);
 
   const formatDuration = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);

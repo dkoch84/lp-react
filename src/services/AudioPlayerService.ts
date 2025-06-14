@@ -70,63 +70,86 @@ export class AudioPlayerService {
     }
 
     const track = this.currentAlbum.tracks[this.currentTrackIndex];
+    console.log(`Starting playback: ${track.title} by ${track.artist} (Track ${this.currentTrackIndex + 1}/${this.currentAlbum.tracks.length})`);
     
-    // Stop current audio if playing but don't immediately clear source
+    // Stop and clean up current audio immediately but gently
     if (this.currentAudio) {
-      if (!this.currentAudio.paused) {
-        this.currentAudio.pause();
-      }
+      console.log('Stopping previous track');
+      this.currentAudio.pause();
       this.currentAudio.currentTime = 0;
+      // Remove event listeners to prevent interference
+      this.currentAudio.onloadedmetadata = null;
+      this.currentAudio.ontimeupdate = null;
+      this.currentAudio.onended = null;
+      this.currentAudio.onerror = null;
     }
 
     // Create new audio element
     const newAudio = new Audio();
+    console.log(`Loading audio URL: ${musicLibraryService.getAudioUrl(track)}`);
     newAudio.src = musicLibraryService.getAudioUrl(track);
+    newAudio.preload = 'auto';
     
-    // Set up event listeners before setting as current
+    // Set up event listeners first
     this.setupAudioEventListeners(newAudio, track);
 
-    // Replace current audio only after new one is set up
+    // Replace current audio
     const oldAudio = this.currentAudio;
     this.currentAudio = newAudio;
     
-    // Clean up old audio after a delay to avoid AbortError
+    // Clean up old audio source after delay
     if (oldAudio) {
       setTimeout(() => {
         try {
           oldAudio.src = '';
+          oldAudio.load(); // Ensure cleanup
         } catch (error) {
           // Ignore cleanup errors
         }
-      }, 100);
+      }, 500);
     }
 
     // Preload next track for gapless playback
     this.preloadNextTrack();
 
+    // Update state first
+    this.updatePlaybackState({
+      currentTrack: track,
+      duration: track.duration,
+      isPlaying: false // Will be set to true when play succeeds
+    });
+
     try {
+      console.log(`Attempting to play: ${track.title}`);
       await this.currentAudio.play();
-      this.updatePlaybackState({
-        isPlaying: true,
-        currentTrack: track,
-        duration: track.duration
-      });
+      console.log(`Successfully started playing: ${track.title}`);
+      this.updatePlaybackState({ isPlaying: true });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Error playing track:', track.title, 'by', track.artist, '-', errorMessage);
-      // Only skip if this is still the current track (prevent cascading skips)
+      console.error(`Failed to play track: ${track.title} by ${track.artist} - ${errorMessage}`);
+      
+      // Only skip if this is still the current track and not at the end of album
       if (this.currentAudio === newAudio && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
+        console.log('Attempting to skip to next track due to playback error');
         this.currentTrackIndex++;
-        // Add delay before trying next track to prevent rapid cascade of failures
-        setTimeout(() => this.playCurrentTrack(), 1000);
+        // Add significant delay before trying next track to prevent rapid cascade of failures
+        setTimeout(() => {
+          if (this.currentAudio === newAudio) { // Double-check we're still on the same audio element
+            this.playCurrentTrack();
+          }
+        }, 2000);
       } else {
+        console.log('Cannot skip track or reached end of album');
         this.updatePlaybackState({ isPlaying: false });
       }
     }
   }
 
   private setupAudioEventListeners(audio: HTMLAudioElement, track: Track) {
+    console.log(`Setting up event listeners for: ${track.title}`);
+    
     audio.addEventListener('loadedmetadata', () => {
+      console.log(`Metadata loaded for: ${track.title}, duration: ${audio.duration}s`);
       this.updatePlaybackState({ duration: audio.duration });
     });
 
@@ -135,27 +158,46 @@ export class AudioPlayerService {
     });
 
     audio.addEventListener('ended', () => {
+      console.log(`Track ended: ${track.title}`);
       this.handleTrackEnd();
     });
 
-    audio.addEventListener('error', (error) => {
+    audio.addEventListener('error', (event) => {
       // Only log and handle errors for the current audio to avoid spam from old elements
       if (audio === this.currentAudio) {
-        console.error('Audio playback error for track:', track.title, 'by', track.artist);
-        // Only skip to next track for certain error types, and with delay to prevent cascading
-        if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
-          // Add longer delay to prevent rapid failure cascades
-          setTimeout(() => {
-            // Check again if this is still the current audio before skipping
-            if (audio === this.currentAudio) {
-              this.currentTrackIndex++;
-              this.playCurrentTrack();
-            }
-          }, 2000);
+        const error = audio.error;
+        const errorCode = error?.code || 'unknown';
+        const errorMessage = error?.message || 'Unknown audio error';
+        console.error(`Audio error for ${track.title} by ${track.artist}: Code ${errorCode} - ${errorMessage}`);
+        
+        // Be more conservative about auto-skipping on errors
+        // Only skip for network errors or unsupported formats, not user interruptions
+        if (error && (error.code === 2 || error.code === 3 || error.code === 4)) { // NETWORK_ERROR, DECODE_ERROR, SRC_NOT_SUPPORTED
+          if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
+            console.log(`Skipping to next track due to error code ${error.code}`);
+            setTimeout(() => {
+              if (audio === this.currentAudio) {
+                this.currentTrackIndex++;
+                this.playCurrentTrack();
+              }
+            }, 3000);
+          } else {
+            console.log('Cannot skip - reached end of album or no album loaded');
+            this.updatePlaybackState({ isPlaying: false });
+          }
         } else {
+          console.log('Error not suitable for auto-skip, stopping playback');
           this.updatePlaybackState({ isPlaying: false });
         }
       }
+    });
+
+    audio.addEventListener('canplaythrough', () => {
+      console.log(`Track ready to play: ${track.title}`);
+    });
+
+    audio.addEventListener('waiting', () => {
+      console.log(`Track buffering: ${track.title}`);
     });
   }
 

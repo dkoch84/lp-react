@@ -37,6 +37,7 @@ export class MusicLibraryService {
       return this.currentScanPromise;
     }
     
+    console.log('Starting new SSE scan');
     this.scanInProgress = true;
     this.currentScanPromise = new Promise((resolve, reject) => {
       const eventSource = new EventSource(`${API_BASE_URL}/library/scan`);
