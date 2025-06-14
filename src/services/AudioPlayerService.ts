@@ -3,10 +3,17 @@ import { musicLibraryService } from './MusicLibraryService';
 
 export class AudioPlayerService {
   private audioContext: AudioContext | null = null;
-  private currentAudio: HTMLAudioElement | null = null;
-  private nextAudio: HTMLAudioElement | null = null;
+  private currentSource: AudioBufferSourceNode | null = null;
+  private nextSource: AudioBufferSourceNode | null = null;
+  private currentBuffer: AudioBuffer | null = null;
+  private nextBuffer: AudioBuffer | null = null;
+  private gainNode: GainNode | null = null;
   private currentTrackIndex: number = 0;
   private currentAlbum: Album | null = null;
+  private startTime: number = 0;
+  private pausedAt: number = 0;
+  private isSourcePlaying: boolean = false;
+  private animationFrameId: number | null = null;
   private playbackState: PlaybackState = {
     isPlaying: false,
     currentTrack: null,
@@ -23,8 +30,17 @@ export class AudioPlayerService {
   private initializeAudioContext() {
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (this.audioContext && typeof this.audioContext.createGain === 'function') {
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.connect(this.audioContext.destination);
+      } else {
+        console.warn('AudioContext available but createGain not supported');
+        this.gainNode = null;
+      }
     } catch (error) {
       console.error('Failed to initialize AudioContext:', error);
+      this.audioContext = null;
+      this.gainNode = null;
     }
   }
 
@@ -50,11 +66,50 @@ export class AudioPlayerService {
     this.notifyStateChange();
   }
 
+  private async loadAudioBuffer(track: Track): Promise<AudioBuffer> {
+    if (!this.audioContext) {
+      throw new Error('AudioContext not initialized');
+    }
+
+    const url = musicLibraryService.getAudioUrl(track);
+    console.log(`Loading audio buffer for: ${track.title} from ${url}`);
+    
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch audio: ${response.status} ${response.statusText}`);
+    }
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+    
+    console.log(`Audio buffer loaded: ${track.title}, duration: ${audioBuffer.duration}s`);
+    return audioBuffer;
+  }
+
+  private updatePosition() {
+    if (this.isSourcePlaying && this.audioContext && this.startTime > 0) {
+      const elapsed = this.audioContext.currentTime - this.startTime + this.pausedAt;
+      this.updatePlaybackState({ position: elapsed });
+      this.animationFrameId = requestAnimationFrame(() => this.updatePosition());
+    }
+  }
+
+  private stopPositionUpdates() {
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+  }
+
   async playAlbum(album: Album, startTrackIndex: number = 0) {
     if (album.tracks.length === 0) return;
 
     this.currentAlbum = album;
     this.currentTrackIndex = startTrackIndex;
+    
+    // Clear any existing buffers when starting new album
+    this.currentBuffer = null;
+    this.nextBuffer = null;
 
     this.updatePlaybackState({
       currentAlbum: album,
@@ -69,104 +124,75 @@ export class AudioPlayerService {
       return;
     }
 
+    if (!this.audioContext || !this.gainNode) {
+      console.error('AudioContext not properly initialized');
+      return;
+    }
+
     const track = this.currentAlbum.tracks[this.currentTrackIndex];
     console.log(`Starting playback: ${track.title} by ${track.artist} (Track ${this.currentTrackIndex + 1}/${this.currentAlbum.tracks.length})`);
     
-    // Store the old audio reference for later cleanup
-    const oldAudio = this.currentAudio;
+    // Stop current playback
+    this.stopCurrentSource();
     
-    // Stop current audio gently without immediate cleanup
-    if (oldAudio) {
-      console.log('Pausing previous track');
-      try {
-        oldAudio.pause();
-      } catch (error) {
-        // Ignore pause errors
-      }
-    }
-
-    // Create new audio element
-    const newAudio = new Audio();
-    console.log(`Loading audio URL: ${musicLibraryService.getAudioUrl(track)}`);
-    newAudio.src = musicLibraryService.getAudioUrl(track);
-    newAudio.preload = 'auto';
-    
-    // Replace current audio reference immediately
-    this.currentAudio = newAudio;
-    
-    // Set up event listeners for new audio
-    this.setupAudioEventListeners(newAudio, track);
-
-    // Update state immediately
-    this.updatePlaybackState({
-      currentTrack: track,
-      duration: track.duration,
-      isPlaying: false // Will be set to true when play succeeds
-    });
-
-    // Wait for the new audio to be ready before attempting to play
     try {
-      console.log(`Attempting to play: ${track.title}`);
-      
-      // Try to play the new audio
-      await newAudio.play();
-      console.log(`Successfully started playing: ${track.title}`);
-      this.updatePlaybackState({ isPlaying: true });
-      
-      // Now that the new track is playing successfully, clean up the old audio
-      if (oldAudio && oldAudio !== newAudio) {
-        setTimeout(() => {
-          try {
-            // Remove event listeners from old audio
-            oldAudio.onloadedmetadata = null;
-            oldAudio.ontimeupdate = null;
-            oldAudio.onended = null;
-            oldAudio.onerror = null;
-            oldAudio.src = '';
-            oldAudio.load();
-          } catch (error) {
-            // Ignore cleanup errors
-          }
-        }, 1000); // Increased delay for safer cleanup
+      // Resume AudioContext if suspended
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
       }
+
+      // Load audio buffer if not already loaded
+      if (!this.currentBuffer) {
+        this.currentBuffer = await this.loadAudioBuffer(track);
+      }
+
+      // Create and configure audio source
+      this.currentSource = this.audioContext.createBufferSource();
+      this.currentSource.buffer = this.currentBuffer;
+      this.currentSource.connect(this.gainNode);
+
+      // Set up event handlers
+      this.currentSource.onended = () => {
+        if (this.currentSource && this.isSourcePlaying) {
+          console.log(`Track ended: ${track.title}`);
+          this.handleTrackEnd();
+        }
+      };
+
+      // Update state
+      this.updatePlaybackState({
+        currentTrack: track,
+        duration: this.currentBuffer.duration,
+        isPlaying: true
+      });
+
+      // Start playback
+      this.startTime = this.audioContext.currentTime;
+      this.pausedAt = 0;
+      this.isSourcePlaying = true;
+      this.currentSource.start(0);
+      
+      console.log(`Successfully started playing: ${track.title}`);
+      
+      // Start position updates
+      this.updatePosition();
       
       // Preload next track for gapless playback
       this.preloadNextTrack();
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
-      // Don't log errors for expected interruptions during cleanup
-      const isInterruptedError = error instanceof Error && 
-        (error.message.includes('interrupted') || 
-         error.message.includes('removed from the document') ||
-         error.name === 'AbortError');
-      
-      if (!isInterruptedError) {
-        console.error(`Failed to play track: ${track.title} by ${track.artist} - ${errorMessage}`);
-      }
+      console.error(`Failed to play track: ${track.title} by ${track.artist} - ${errorMessage}`);
       
       // Only auto-skip on certain types of errors and if we're not at the end
-      if (this.currentAudio === newAudio && 
-          this.currentAlbum && 
-          this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
-        
-        // Check if this is a recoverable error
-        if (error instanceof Error && error.name === 'AbortError') {
-          // Don't auto-skip on abort errors, just stop
-          console.log('Play was aborted, not auto-skipping');
-          this.updatePlaybackState({ isPlaying: false });
-          return;
-        }
-        
+      if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
         console.log('Attempting to skip to next track due to playback error');
         this.currentTrackIndex++;
         // Add delay before trying next track
         setTimeout(() => {
-          if (this.currentAudio === newAudio) {
-            this.playCurrentTrack();
-          }
-        }, 3000); // Increased delay to prevent rapid failures
+          this.currentBuffer = null; // Reset buffer to force reload
+          this.playCurrentTrack();
+        }, 3000);
       } else {
         console.log('Cannot skip track or reached end of album');
         this.updatePlaybackState({ isPlaying: false });
@@ -174,100 +200,45 @@ export class AudioPlayerService {
     }
   }
 
-  private setupAudioEventListeners(audio: HTMLAudioElement, track: Track) {
-    console.log(`Setting up event listeners for: ${track.title}`);
+  private stopCurrentSource() {
+    this.stopPositionUpdates();
     
-    // Use a flag to track if this audio element is still valid
-    let isCurrentAudio = () => audio === this.currentAudio;
+    if (this.currentSource) {
+      try {
+        this.currentSource.stop();
+      } catch (error) {
+        // Source might already be stopped
+      }
+      this.currentSource.disconnect();
+      this.currentSource = null;
+    }
     
-    audio.addEventListener('loadedmetadata', () => {
-      if (isCurrentAudio()) {
-        console.log(`Metadata loaded for: ${track.title}, duration: ${audio.duration}s`);
-        this.updatePlaybackState({ duration: audio.duration });
-      }
-    });
-
-    audio.addEventListener('timeupdate', () => {
-      if (isCurrentAudio()) {
-        this.updatePlaybackState({ position: audio.currentTime });
-      }
-    });
-
-    audio.addEventListener('ended', () => {
-      if (isCurrentAudio()) {
-        console.log(`Track ended: ${track.title}`);
-        this.handleTrackEnd();
-      }
-    });
-
-    audio.addEventListener('error', (event) => {
-      // Only handle errors for the current audio to avoid spam from old elements
-      if (isCurrentAudio()) {
-        const error = audio.error;
-        const errorCode = error?.code || 'unknown';
-        const errorMessage = error?.message || 'Unknown audio error';
-        console.error(`Audio error for ${track.title} by ${track.artist}: Code ${errorCode} - ${errorMessage}`);
-        
-        // Be more conservative about auto-skipping on errors
-        // Only skip for network errors or unsupported formats, not user interruptions
-        if (error && (error.code === 2 || error.code === 3 || error.code === 4)) { // NETWORK_ERROR, DECODE_ERROR, SRC_NOT_SUPPORTED
-          if (this.currentAlbum && this.currentTrackIndex < this.currentAlbum.tracks.length - 1) {
-            console.log(`Skipping to next track due to error code ${error.code}`);
-            setTimeout(() => {
-              if (isCurrentAudio()) {
-                this.currentTrackIndex++;
-                this.playCurrentTrack();
-              }
-            }, 3000);
-          } else {
-            console.log('Cannot skip - reached end of album or no album loaded');
-            this.updatePlaybackState({ isPlaying: false });
-          }
-        } else {
-          console.log('Error not suitable for auto-skip, stopping playback');
-          this.updatePlaybackState({ isPlaying: false });
-        }
-      }
-    });
-
-    audio.addEventListener('canplaythrough', () => {
-      if (isCurrentAudio()) {
-        console.log(`Track ready to play: ${track.title}`);
-      }
-    });
-
-    audio.addEventListener('waiting', () => {
-      if (isCurrentAudio()) {
-        console.log(`Track buffering: ${track.title}`);
-      }
-    });
+    this.isSourcePlaying = false;
+    this.startTime = 0;
+    this.pausedAt = 0;
   }
 
-  private preloadNextTrack() {
+  private async preloadNextTrack() {
     if (!this.currentAlbum || this.currentTrackIndex >= this.currentAlbum.tracks.length - 1) {
+      return;
+    }
+
+    if (!this.audioContext) {
       return;
     }
 
     const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex + 1];
     
-    // Clean up existing next audio
-    if (this.nextAudio) {
-      try {
-        this.nextAudio.src = '';
-      } catch (error) {
-        // Ignore cleanup errors
-      }
-      this.nextAudio = null;
-    }
-
-    // Create new preloaded audio with minimal setup
+    // Clean up existing next buffer
+    this.nextBuffer = null;
+    
+    // Load next track buffer in background
     try {
-      this.nextAudio = new Audio();
-      this.nextAudio.src = musicLibraryService.getAudioUrl(nextTrack);
-      this.nextAudio.preload = 'auto';
+      this.nextBuffer = await this.loadAudioBuffer(nextTrack);
+      console.log(`Next track preloaded: ${nextTrack.title}`);
     } catch (error) {
       console.warn('Failed to preload next track:', error);
-      this.nextAudio = null;
+      this.nextBuffer = null;
     }
   }
 
@@ -278,43 +249,64 @@ export class AudioPlayerService {
     this.currentTrackIndex++;
     
     if (this.currentTrackIndex < this.currentAlbum.tracks.length) {
-      // Use preloaded next track for gapless playback if available
-      if (this.nextAudio) {
-        const oldAudio = this.currentAudio;
-        this.currentAudio = this.nextAudio;
-        this.nextAudio = null;
+      // Use preloaded next buffer for gapless playback if available
+      if (this.nextBuffer && this.audioContext && this.gainNode) {
+        console.log('Using preloaded buffer for gapless transition');
+        
+        // Stop current source
+        this.stopCurrentSource();
+        
+        // Set up next track
+        this.currentBuffer = this.nextBuffer;
+        this.nextBuffer = null;
         
         const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex];
-        this.setupAudioEventListeners(this.currentAudio, nextTrack);
         
-        this.currentAudio.play().then(() => {
+        try {
+          // Create and configure audio source
+          this.currentSource = this.audioContext.createBufferSource();
+          this.currentSource.buffer = this.currentBuffer;
+          this.currentSource.connect(this.gainNode);
+
+          // Set up event handlers
+          this.currentSource.onended = () => {
+            if (this.currentSource && this.isSourcePlaying) {
+              console.log(`Track ended: ${nextTrack.title}`);
+              this.handleTrackEnd();
+            }
+          };
+
+          // Start playback immediately for gapless transition
+          this.startTime = this.audioContext.currentTime;
+          this.pausedAt = 0;
+          this.isSourcePlaying = true;
+          this.currentSource.start(0);
+
           this.updatePlaybackState({
             currentTrack: nextTrack,
-            duration: nextTrack.duration
+            duration: this.currentBuffer.duration
           });
+          
+          // Start position updates
+          this.updatePosition();
+          
+          // Preload the next track
           this.preloadNextTrack();
-        }).catch(error => {
-          console.error('Error playing next track:', error);
+          
+        } catch (error) {
+          console.error('Error playing next track with preloaded buffer:', error);
           // Fallback to regular loading if preloaded track fails
+          this.currentBuffer = null;
           this.playCurrentTrack();
-        });
-        
-        // Clean up old audio after delay
-        if (oldAudio) {
-          setTimeout(() => {
-            try {
-              oldAudio.src = '';
-            } catch (error) {
-              // Ignore cleanup errors
-            }
-          }, 100);
         }
       } else {
         // Fallback to regular track loading
+        this.currentBuffer = null;
         this.playCurrentTrack();
       }
     } else {
       // Album finished
+      this.stopCurrentSource();
       this.updatePlaybackState({
         isPlaying: false,
         position: 0
@@ -323,24 +315,61 @@ export class AudioPlayerService {
   }
 
   pause() {
-    if (this.currentAudio) {
-      this.currentAudio.pause();
+    if (this.isSourcePlaying && this.audioContext) {
+      this.stopCurrentSource();
+      
+      // Calculate how much time has elapsed
+      if (this.startTime > 0) {
+        this.pausedAt += this.audioContext.currentTime - this.startTime;
+      }
+      
       this.updatePlaybackState({ isPlaying: false });
+      console.log('Playback paused');
     }
   }
 
   resume() {
-    if (this.currentAudio && this.currentAudio.paused) {
-      this.currentAudio.play().then(() => {
+    if (!this.isSourcePlaying && this.currentBuffer && this.audioContext && this.gainNode) {
+      try {
+        // Resume AudioContext if suspended
+        if (this.audioContext.state === 'suspended') {
+          this.audioContext.resume();
+        }
+
+        // Create new source for resuming
+        this.currentSource = this.audioContext.createBufferSource();
+        this.currentSource.buffer = this.currentBuffer;
+        this.currentSource.connect(this.gainNode);
+
+        // Set up event handlers
+        const currentTrack = this.playbackState.currentTrack;
+        this.currentSource.onended = () => {
+          if (this.currentSource && this.isSourcePlaying && currentTrack) {
+            console.log(`Track ended: ${currentTrack.title}`);
+            this.handleTrackEnd();
+          }
+        };
+
+        // Start from where we paused
+        this.startTime = this.audioContext.currentTime;
+        this.isSourcePlaying = true;
+        this.currentSource.start(0, this.pausedAt);
+        
         this.updatePlaybackState({ isPlaying: true });
-      }).catch(error => {
+        this.updatePosition();
+        
+        console.log(`Playback resumed from ${this.pausedAt}s`);
+      } catch (error) {
         console.error('Error resuming playback:', error);
-      });
+      }
     }
   }
 
   stop() {
     console.log('Stopping audio playback');
+    
+    // Stop current source and position updates
+    this.stopCurrentSource();
     
     // Immediately update state to prevent new operations
     this.updatePlaybackState({
@@ -353,56 +382,9 @@ export class AudioPlayerService {
 
     this.currentAlbum = null;
     this.currentTrackIndex = 0;
-
-    // Handle current audio cleanup with more careful timing
-    if (this.currentAudio) {
-      const audioToCleanup = this.currentAudio;
-      this.currentAudio = null; // Clear reference immediately to prevent further use
-      
-      try {
-        audioToCleanup.pause();
-        audioToCleanup.currentTime = 0;
-      } catch (error) {
-        // Ignore pause/seek errors during cleanup
-      }
-      
-      // Remove event listeners to prevent callbacks during cleanup
-      setTimeout(() => {
-        try {
-          audioToCleanup.onloadedmetadata = null;
-          audioToCleanup.ontimeupdate = null;
-          audioToCleanup.onended = null;
-          audioToCleanup.onerror = null;
-        } catch (error) {
-          // Ignore errors
-        }
-      }, 100);
-      
-      // Clear src after longer delay to avoid AbortError
-      setTimeout(() => {
-        try {
-          audioToCleanup.src = '';
-          audioToCleanup.load();
-        } catch (error) {
-          // Ignore cleanup errors
-        }
-      }, 1000); // Increased delay
-    }
-    
-    // Handle next audio cleanup
-    if (this.nextAudio) {
-      const nextAudioToCleanup = this.nextAudio;
-      this.nextAudio = null; // Clear reference immediately
-      
-      setTimeout(() => {
-        try {
-          nextAudioToCleanup.src = '';
-          nextAudioToCleanup.load();
-        } catch (error) {
-          // Ignore cleanup errors
-        }
-      }, 1000); // Increased delay
-    }
+    this.currentBuffer = null;
+    this.nextBuffer = null;
+    this.pausedAt = 0;
   }
 
   getCurrentState(): PlaybackState {
