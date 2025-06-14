@@ -113,6 +113,10 @@ export class AudioPlayerService {
       console.log(`Successfully started playing: ${track.title}`);
       this.updatePlaybackState({ isPlaying: true });
       
+      // Start preloading next track immediately for gapless playback
+      // Don't wait for canplaythrough - start buffering as early as possible
+      this.preloadNextTrack();
+      
       // Now that the new track is playing successfully, clean up the old audio
       if (oldAudio && oldAudio !== newAudio) {
         setTimeout(() => {
@@ -230,9 +234,7 @@ export class AudioPlayerService {
     audio.addEventListener('canplaythrough', () => {
       if (isCurrentAudio()) {
         console.log(`Track ready to play: ${track.title}`);
-        // Start preloading next track as soon as current track is ready
-        // This provides more buffer time for gapless playback
-        this.preloadNextTrack();
+        // Track is ready - next track preloading already started when this track began playing
       }
     });
 
@@ -249,6 +251,7 @@ export class AudioPlayerService {
     }
 
     const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex + 1];
+    console.log(`Starting to preload next track: ${nextTrack.title} by ${nextTrack.artist}`);
     
     // Clean up existing next audio
     if (this.nextAudio) {
@@ -265,6 +268,33 @@ export class AudioPlayerService {
       this.nextAudio = new Audio();
       this.nextAudio.src = musicLibraryService.getAudioUrl(nextTrack);
       this.nextAudio.preload = 'auto';
+      
+      // Add event listeners to monitor buffering progress
+      this.nextAudio.addEventListener('loadstart', () => {
+        console.log(`Loading started for next track: ${nextTrack.title}`);
+      });
+      
+      this.nextAudio.addEventListener('canplay', () => {
+        console.log(`Next track ready to play: ${nextTrack.title}`);
+      });
+      
+      this.nextAudio.addEventListener('canplaythrough', () => {
+        console.log(`Next track fully buffered: ${nextTrack.title}`);
+      });
+      
+      this.nextAudio.addEventListener('progress', () => {
+        if (this.nextAudio && this.nextAudio.buffered.length > 0) {
+          const bufferedEnd = this.nextAudio.buffered.end(0);
+          const duration = this.nextAudio.duration || nextTrack.duration;
+          const bufferedPercent = duration > 0 ? Math.round((bufferedEnd / duration) * 100) : 0;
+          console.log(`Next track buffering: ${bufferedPercent}% (${bufferedEnd.toFixed(1)}s of ${duration.toFixed(1)}s) - ${nextTrack.title}`);
+        }
+      });
+      
+      this.nextAudio.addEventListener('error', (event) => {
+        console.warn(`Failed to preload next track: ${nextTrack.title}`, event);
+      });
+      
     } catch (error) {
       console.warn('Failed to preload next track:', error);
       this.nextAudio = null;
@@ -280,6 +310,7 @@ export class AudioPlayerService {
     if (this.currentTrackIndex < this.currentAlbum.tracks.length) {
       // Use preloaded next track for gapless playback if available
       if (this.nextAudio) {
+        console.log('Using preloaded track for gapless transition');
         const oldAudio = this.currentAudio;
         const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex];
         
@@ -299,6 +330,7 @@ export class AudioPlayerService {
         const playWhenReady = () => {
           this.currentAudio!.play().then(() => {
             console.log(`Gapless transition to: ${nextTrack.title}`);
+            this.updatePlaybackState({ isPlaying: true });
             this.preloadNextTrack();
           }).catch(error => {
             console.error('Error playing next track:', error);
@@ -307,12 +339,23 @@ export class AudioPlayerService {
           });
         };
 
-        if (this.currentAudio.readyState >= 3) { // HAVE_FUTURE_DATA or better
+        // Check the buffering state of the preloaded track
+        const readyState = this.currentAudio.readyState;
+        const bufferedPercent = this.currentAudio.buffered.length > 0 
+          ? Math.round((this.currentAudio.buffered.end(0) / this.currentAudio.duration) * 100) 
+          : 0;
+        
+        console.log(`Preloaded track ready state: ${readyState}, buffered: ${bufferedPercent}%`);
+
+        if (readyState >= 3) { // HAVE_FUTURE_DATA or better
+          console.log('Preloaded track is ready for immediate playback');
           playWhenReady();
         } else {
+          console.log('Waiting for preloaded track to be ready...');
           // Wait for the audio to be ready
           const onCanPlay = () => {
             this.currentAudio!.removeEventListener('canplay', onCanPlay);
+            console.log('Preloaded track is now ready');
             playWhenReady();
           };
           this.currentAudio.addEventListener('canplay', onCanPlay);
@@ -320,6 +363,7 @@ export class AudioPlayerService {
           // Fallback timeout in case canplay never fires
           setTimeout(() => {
             this.currentAudio!.removeEventListener('canplay', onCanPlay);
+            console.log('Timeout reached, playing preloaded track anyway');
             playWhenReady();
           }, 100);
         }
@@ -328,6 +372,7 @@ export class AudioPlayerService {
         if (oldAudio) {
           setTimeout(() => {
             try {
+              console.log('Cleaning up old audio src');
               oldAudio.src = '';
             } catch (error) {
               // Ignore cleanup errors

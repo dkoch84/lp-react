@@ -16,6 +16,12 @@ class MockAudio {
   currentTime = 0;
   duration = 0;
   error: any = null;
+  readyState = 4; // HAVE_ENOUGH_DATA
+  buffered = {
+    length: 1,
+    start: () => 0,
+    end: () => this.duration
+  };
   
   private listeners: { [key: string]: EventListener[] } = {};
   
@@ -251,7 +257,7 @@ describe('AudioPlayerService', () => {
       originalAudio.simulateEnd();
       
       // Wait for transition and cleanup
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise(resolve => setTimeout(resolve, 200));
 
       // Verify old audio was cleaned up (src should be cleared)
       expect(originalAudio.src).toBe('');
