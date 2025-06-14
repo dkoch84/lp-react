@@ -130,9 +130,6 @@ export class AudioPlayerService {
         }, 1000); // Increased delay for safer cleanup
       }
       
-      // Preload next track for gapless playback
-      this.preloadNextTrack();
-      
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       
@@ -233,6 +230,9 @@ export class AudioPlayerService {
     audio.addEventListener('canplaythrough', () => {
       if (isCurrentAudio()) {
         console.log(`Track ready to play: ${track.title}`);
+        // Start preloading next track as soon as current track is ready
+        // This provides more buffer time for gapless playback
+        this.preloadNextTrack();
       }
     });
 
@@ -281,23 +281,48 @@ export class AudioPlayerService {
       // Use preloaded next track for gapless playback if available
       if (this.nextAudio) {
         const oldAudio = this.currentAudio;
+        const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex];
+        
+        // Update state immediately to reduce perceived gap
+        this.updatePlaybackState({
+          currentTrack: nextTrack,
+          duration: nextTrack.duration
+        });
+        
         this.currentAudio = this.nextAudio;
         this.nextAudio = null;
         
-        const nextTrack = this.currentAlbum.tracks[this.currentTrackIndex];
+        // Set up event listeners before playing
         this.setupAudioEventListeners(this.currentAudio, nextTrack);
         
-        this.currentAudio.play().then(() => {
-          this.updatePlaybackState({
-            currentTrack: nextTrack,
-            duration: nextTrack.duration
+        // Check if the preloaded audio is ready, otherwise wait briefly
+        const playWhenReady = () => {
+          this.currentAudio!.play().then(() => {
+            console.log(`Gapless transition to: ${nextTrack.title}`);
+            this.preloadNextTrack();
+          }).catch(error => {
+            console.error('Error playing next track:', error);
+            // Fallback to regular loading if preloaded track fails
+            this.playCurrentTrack();
           });
-          this.preloadNextTrack();
-        }).catch(error => {
-          console.error('Error playing next track:', error);
-          // Fallback to regular loading if preloaded track fails
-          this.playCurrentTrack();
-        });
+        };
+
+        if (this.currentAudio.readyState >= 3) { // HAVE_FUTURE_DATA or better
+          playWhenReady();
+        } else {
+          // Wait for the audio to be ready
+          const onCanPlay = () => {
+            this.currentAudio!.removeEventListener('canplay', onCanPlay);
+            playWhenReady();
+          };
+          this.currentAudio.addEventListener('canplay', onCanPlay);
+          
+          // Fallback timeout in case canplay never fires
+          setTimeout(() => {
+            this.currentAudio!.removeEventListener('canplay', onCanPlay);
+            playWhenReady();
+          }, 100);
+        }
         
         // Clean up old audio after delay
         if (oldAudio) {
