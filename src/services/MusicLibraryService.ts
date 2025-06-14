@@ -118,15 +118,15 @@ export class MusicLibraryService {
   async extractArtistImage(artistName: string): Promise<string | null> {
     try {
       const artistImageUrl = this.getArtistImageUrl(artistName);
-      const response = await fetch(artistImageUrl);
+      const response = await fetch(artistImageUrl, { method: 'HEAD' }); // Just check if it exists
       
       if (!response.ok) {
         // Silently handle 404s and other expected failures
         return null;
       }
       
-      const blob = await response.blob();
-      return URL.createObjectURL(blob);
+      // Return the direct URL instead of creating a blob URL
+      return artistImageUrl;
     } catch (error) {
       // Only log unexpected errors, not network failures
       if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -141,14 +141,14 @@ export class MusicLibraryService {
   async extractAlbumArt(track: Track): Promise<string | null> {
     const cacheKey = track.relativePath;
     
-    // Check cache first
+    // Check cache first - now we cache the direct URL check result
     if (this.albumArtCache.has(cacheKey)) {
       return this.albumArtCache.get(cacheKey) || null;
     }
     
     try {
       const albumArtUrl = this.getAlbumArtUrl(track);
-      const response = await fetch(albumArtUrl);
+      const response = await fetch(albumArtUrl, { method: 'HEAD' }); // Just check if it exists
       
       if (!response.ok) {
         // Cache the negative result to avoid repeated requests
@@ -156,12 +156,9 @@ export class MusicLibraryService {
         return null;
       }
       
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      
-      // Cache the positive result
-      this.albumArtCache.set(cacheKey, objectUrl);
-      return objectUrl;
+      // Return the direct URL instead of creating a blob URL
+      this.albumArtCache.set(cacheKey, albumArtUrl);
+      return albumArtUrl;
     } catch (error) {
       // Cache the negative result for network errors too
       this.albumArtCache.set(cacheKey, null);
@@ -184,7 +181,8 @@ export class MusicLibraryService {
   }
 
   revokeAudioUrl(url: string): void {
-    // Only revoke blob URLs (album art), not API URLs
+    // Since we no longer use blob URLs, this method is no longer needed
+    // but we keep it for compatibility
     if (url.startsWith('blob:')) {
       URL.revokeObjectURL(url);
       
@@ -198,12 +196,7 @@ export class MusicLibraryService {
   }
   
   clearAlbumArtCache(): void {
-    // Clean up all cached blob URLs
-    this.albumArtCache.forEach((url) => {
-      if (url && url.startsWith('blob:')) {
-        URL.revokeObjectURL(url);
-      }
-    });
+    // Since we no longer use blob URLs, just clear the cache
     this.albumArtCache.clear();
   }
 }

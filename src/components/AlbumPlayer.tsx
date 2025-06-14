@@ -33,23 +33,15 @@ const AlbumPlayer: React.FC<AlbumPlayerProps> = ({ album, onBack }) => {
 
   useEffect(() => {
     let isMounted = true;
-    let currentAlbumArt: string | null = null;
     
     const loadAlbumArt = async () => {
-      // Clean up previous album art
-      if (albumArt) {
-        URL.revokeObjectURL(albumArt);
-        setAlbumArt(null);
-      }
+      setAlbumArt(null);
       
       if (album && album.tracks.length > 0) {
         try {
           const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0]);
           if (isMounted) {
-            currentAlbumArt = artUrl;
             setAlbumArt(artUrl);
-          } else if (artUrl) {
-            URL.revokeObjectURL(artUrl);
           }
         } catch (error) {
           console.error('Error loading album art:', error);
@@ -61,11 +53,8 @@ const AlbumPlayer: React.FC<AlbumPlayerProps> = ({ album, onBack }) => {
 
     return () => {
       isMounted = false;
-      if (currentAlbumArt) {
-        URL.revokeObjectURL(currentAlbumArt);
-      }
     };
-  }, [album, albumArt]);
+  }, [album]); // Only depend on album, not albumArt
 
   const handlePlay = () => {
     if (album) {

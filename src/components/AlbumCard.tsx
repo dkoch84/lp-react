@@ -24,9 +24,6 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
           const artUrl = await musicLibraryService.extractAlbumArt(album.tracks[0]);
           if (isMounted) {
             setAlbumArt(artUrl);
-          } else if (artUrl && artUrl.startsWith('blob:')) {
-            // Clean up if component unmounted
-            URL.revokeObjectURL(artUrl);
           }
         } catch (error) {
           // Silently handle expected failures (like network errors)
@@ -47,15 +44,6 @@ const AlbumCard: React.FC<AlbumCardProps> = ({ album, onSelect }) => {
       isMounted = false;
     };
   }, [album.id, album.tracks]); // Depend on album.id and tracks
-
-  // Cleanup effect when component unmounts or album art changes
-  useEffect(() => {
-    return () => {
-      if (albumArt && albumArt.startsWith('blob:')) {
-        URL.revokeObjectURL(albumArt);
-      }
-    };
-  }, [albumArt]);
 
   const formatDuration = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
